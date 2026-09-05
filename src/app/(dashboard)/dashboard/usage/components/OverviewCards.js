@@ -3,36 +3,57 @@
 import PropTypes from "prop-types";
 import Card from "@/shared/components/Card";
 
-const fmt = (n) => new Intl.NumberFormat().format(n || 0);
-const fmtCost = (n) => `$${(n || 0).toFixed(2)}`;
+const compactNumberFormatter = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+const fmt = (number) => compactNumberFormatter.format(number || 0);
+const fmtCost = (number) => {
+  const value = number || 0;
+  return Math.abs(value) >= 1000 ? `$${fmt(value)}` : `$${value.toFixed(2)}`;
+};
+
+function UsageMetricCard({ label, value, icon, tone = "text-text-main", detail }) {
+  return (
+    <Card className="flex min-w-0 items-start justify-between gap-3 px-4 py-3">
+      <div className="min-w-0">
+        <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">{label}</p>
+        <p className={`mt-1 truncate text-2xl font-bold ${tone}`}>{value}</p>
+        {detail ? <p className="mt-1 text-[10px] text-text-muted">{detail}</p> : null}
+      </div>
+      <span className="material-symbols-outlined rounded-[10px] bg-bg p-2 text-[20px] text-text-muted">
+        {icon}
+      </span>
+    </Card>
+  );
+}
 
 export default function OverviewCards({ stats }) {
   return (
     <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 sm:gap-4">
-      <Card className="flex min-w-0 flex-col gap-1 px-4 py-3">
-        <span className="text-text-muted text-sm uppercase font-semibold">Total Requests</span>
-        <span className="truncate text-2xl font-bold">{fmt(stats.totalRequests)}</span>
-      </Card>
-      <Card className="flex min-w-0 flex-col gap-1 px-4 py-3">
-        <span className="text-text-muted text-sm uppercase font-semibold">Total Input Tokens</span>
-        <span className="truncate text-2xl font-bold text-primary">{fmt(stats.totalPromptTokens)}</span>
-      </Card>
-      <Card className="flex min-w-0 flex-col gap-1 px-4 py-3">
-        <span className="text-text-muted text-sm uppercase font-semibold">Cached Tokens</span>
-        <span className="truncate text-2xl font-bold text-info">{fmt(stats.totalCachedTokens)}</span>
-      </Card>
-      <Card className="flex min-w-0 flex-col gap-1 px-4 py-3">
-        <span className="text-text-muted text-sm uppercase font-semibold">Output Tokens</span>
-        <span className="truncate text-2xl font-bold text-success">{fmt(stats.totalCompletionTokens)}</span>
-      </Card>
-      <Card className="flex min-w-0 flex-col gap-1 px-4 py-3">
-        <span className="text-text-muted text-sm uppercase font-semibold">Est. Cost</span>
-        <span className="truncate text-2xl font-bold text-warning">~{fmtCost(stats.totalCost)}</span>
-        <span className="text-[10px] text-text-muted">Estimated, not actual billing</span>
-      </Card>
+      <UsageMetricCard label="Total Requests" value={fmt(stats.totalRequests)} icon="send" />
+      <UsageMetricCard label="Total Input Tokens" value={fmt(stats.totalPromptTokens)} icon="input" tone="text-primary" />
+      <UsageMetricCard label="Cached Tokens" value={fmt(stats.totalCachedTokens)} icon="cached" tone="text-info" />
+      <UsageMetricCard label="Output Tokens" value={fmt(stats.totalCompletionTokens)} icon="output" tone="text-success" />
+      <UsageMetricCard
+        label="Est. Cost"
+        value={`~${fmtCost(stats.totalCost)}`}
+        icon="payments"
+        tone="text-warning"
+        detail="Estimated, not actual billing"
+      />
     </div>
   );
 }
+
+UsageMetricCard.propTypes = {
+  label: PropTypes.string.isRequired,
+  value: PropTypes.string.isRequired,
+  icon: PropTypes.string.isRequired,
+  tone: PropTypes.string,
+  detail: PropTypes.string,
+};
 
 OverviewCards.propTypes = {
   stats: PropTypes.object.isRequired,

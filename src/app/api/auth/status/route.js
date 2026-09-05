@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { getSettings } from "@/lib/localDb";
+import { getPasskeyCount, getSettings } from "@/lib/localDb";
 import { isOidcConfigured } from "@/lib/auth/oidc";
 import { isSamlConfigured } from "@/lib/auth/saml.js";
 import { getDashboardAuthSession } from "@/lib/auth/dashboardSession";
@@ -10,6 +10,7 @@ export async function GET() {
     const settings = await getSettings();
     const cookieStore = await cookies();
     const session = await getDashboardAuthSession(cookieStore.get("auth_token")?.value);
+    const passkeyCount = await getPasskeyCount();
     const requireLogin = settings.requireLogin !== false;
     const authMode = settings.authMode || "password";
     const ssoType = settings.ssoType || "oidc";
@@ -23,9 +24,9 @@ export async function GET() {
       samlEmail ||
       oidcName ||
       oidcEmail ||
-      (session?.saml ? "SAML user" : session?.oidc ? "OIDC user" : "Password user");
+      (session?.saml ? "SAML user" : session?.oidc ? "OIDC user" : session?.passkey ? "Local User" : "Password user");
 
-    const loginMethod = session?.saml ? "SAML" : session?.oidc ? "OIDC" : "Password";
+    const loginMethod = session?.saml ? "SAML" : session?.oidc ? "OIDC" : session?.passkey ? "Passkey" : "Password";
 
     return NextResponse.json({
       requireLogin,
@@ -36,6 +37,7 @@ export async function GET() {
       samlConfigured: isSamlConfigured(settings),
       samlLoginLabel: (settings.samlLoginLabel || "Sign in with SAML SSO").trim() || "Sign in with SAML SSO",
       hasPassword: !!settings.password,
+      hasPasskeys: passkeyCount > 0,
       displayName,
       loginMethod,
       authenticated: !!session,
@@ -56,6 +58,7 @@ export async function GET() {
       samlConfigured: false,
       samlLoginLabel: "Sign in with SAML SSO",
       hasPassword: false,
+      hasPasskeys: false,
       displayName: "Password user",
       loginMethod: "Password",
       authenticated: false,

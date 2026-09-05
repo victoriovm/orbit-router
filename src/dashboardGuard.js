@@ -29,6 +29,7 @@ const PUBLIC_API_PATHS = [
   "/api/auth/status",
   "/api/auth/oidc",
   "/api/auth/saml",
+  "/api/auth/passkeys/authenticate",
   "/api/version",
   "/api/settings/require-login",
 ];
@@ -202,6 +203,17 @@ export const __test__ = {
 
 export async function proxy(request) {
   const { pathname } = request.nextUrl;
+
+  const isPasskeyManagementRoute =
+    pathname === "/api/auth/passkeys" ||
+    (pathname.startsWith("/api/auth/passkeys/") && !pathname.startsWith("/api/auth/passkeys/authenticate/"));
+
+  if (isPasskeyManagementRoute) {
+    if (await hasValidCliToken(request) || await hasValidToken(request)) {
+      return NextResponse.next();
+    }
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   // Local-only gate for spawn-capable / host-secret routes.
   if (LOCAL_ONLY_PATHS.some((p) => pathname.startsWith(p))) {

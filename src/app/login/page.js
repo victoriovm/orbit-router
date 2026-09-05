@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { browserSupportsWebAuthn, startAuthentication } from "@simplewebauthn/browser";
 import { Card, Button, Input } from "@/shared/components";
 
 export default function LoginPage() {
@@ -9,7 +10,9 @@ export default function LoginPage() {
   const [resetHint, setResetHint] = useState("");
   const [retryAfter, setRetryAfter] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
   const [hasPassword, setHasPassword] = useState(null);
+  const [hasPasskeys, setHasPasskeys] = useState(false);
   const [authMode, setAuthMode] = useState("password");
   const [ssoType, setSsoType] = useState("oidc");
   const [oidcConfigured, setOidcConfigured] = useState(false);
@@ -45,6 +48,7 @@ export default function LoginPage() {
             return;
           }
           setHasPassword(!!data.hasPassword);
+          setHasPasskeys(data.hasPasskeys === true);
           setAuthMode(data.authMode || "password");
           setSsoType(data.ssoType || "oidc");
           setOidcConfigured(data.oidcConfigured === true);
@@ -128,6 +132,50 @@ export default function LoginPage() {
     window.location.href = "/api/auth/saml/start";
   };
 
+  const handlePasskeyLogin = async () => {
+    setError("");
+    setResetHint("");
+
+    if (!browserSupportsWebAuthn()) {
+      setError("Passkeys are not supported by this browser.");
+      return;
+    }
+
+    setPasskeyLoading(true);
+    try {
+      const optionsResponse = await fetch("/api/auth/passkeys/authenticate/options", {
+        method: "POST",
+      });
+      const options = await optionsResponse.json();
+      if (!optionsResponse.ok) {
+        if (options.retryAfter) setRetryAfter(Number(options.retryAfter));
+        throw new Error(options.error || "Failed to start passkey login");
+      }
+
+      const credential = await startAuthentication({ optionsJSON: options });
+      const verificationResponse = await fetch("/api/auth/passkeys/authenticate/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential }),
+      });
+      const verification = await verificationResponse.json();
+      if (!verificationResponse.ok) {
+        if (verification.retryAfter) setRetryAfter(Number(verification.retryAfter));
+        throw new Error(verification.error || "Passkey login failed");
+      }
+
+      window.location.assign("/dashboard");
+    } catch (passkeyError) {
+      setError(
+        passkeyError?.name === "NotAllowedError"
+          ? "Passkey verification was cancelled or timed out."
+          : passkeyError.message || "Passkey login failed."
+      );
+    } finally {
+      setPasskeyLoading(false);
+    }
+  };
+
   const isSsoEnabled = ["sso", "oidc", "saml", "both"].includes(authMode);
   const activeSsoType = ssoType || (authMode === "saml" ? "saml" : "oidc");
 
@@ -136,6 +184,7 @@ export default function LoginPage() {
   const ssoAvailable = samlAvailable || oidcAvailable;
 
   const passwordAvailable = authMode === "password" || authMode === "both" || !ssoAvailable;
+  const passkeyAvailable = passwordAvailable && hasPasskeys;
 
   // Show loading state while checking password
   if (hasPassword === null) {
@@ -154,13 +203,21 @@ export default function LoginPage() {
       {/* Faint grid background */}
       <div className="landing-grid absolute inset-0 pointer-events-none" aria-hidden="true" />
       <div className="relative z-10 w-full max-w-md">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-primary mb-2">9Router</h1>
+        <div className="mb-8 text-center">
+          <img
+            src="/brand/orbit-router-mark.svg"
+            alt=""
+            aria-hidden="true"
+            className="mx-auto mb-4 size-16 rounded-2xl shadow-[var(--shadow-warm)]"
+          />
+          <h1 className="mb-2 text-3xl font-bold text-primary">Orbit Router</h1>
           <p className="text-text-muted">
             {samlAvailable
               ? "Sign in with SAML 2.0 Single Sign-On"
               : oidcAvailable
               ? "Sign in with your OIDC provider to access the dashboard"
+              : passkeyAvailable
+              ? "Use your passkey or password to access the dashboard"
               : "Enter your password to access the dashboard"}
           </p>
         </div>
@@ -218,9 +275,10 @@ export default function LoginPage() {
                 )}
 
                 <div className="flex flex-col gap-2">
-                  <label className="text-sm font-medium">Password</label>
                   <Input
                     type="password"
+                    icon="lock"
+                    inputClassName="pl-12"
                     placeholder="Enter password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -243,6 +301,7 @@ export default function LoginPage() {
                 <Button
                   type="submit"
                   variant="primary"
+                  icon="login"
                   className="w-full"
                   loading={loading}
                   disabled={retryAfter > 0}
@@ -250,9 +309,6 @@ export default function LoginPage() {
                   {retryAfter > 0 ? `Wait ${retryAfter}s` : "Login"}
                 </Button>
 
-                <p className="text-xs text-center text-text-muted mt-2">
-                  Default password is <code className="bg-sidebar px-1 rounded">123456</code>
-                </p>
                 {hasPassword === false && (
                   <p className="text-xs text-center text-amber-600 dark:text-amber-400">
                     Security risk: no password set. You will be asked to set one when logging in remotely.
@@ -261,6 +317,27 @@ export default function LoginPage() {
               </form>
             ) : (
               error && <p className="text-xs text-red-500">{error}</p>
+            )}
+
+            {passkeyAvailable && (
+              <>
+                <div className="flex items-center gap-3" aria-hidden="true">
+                  <span className="h-px flex-1 bg-border/60" />
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">Or</span>
+                  <span className="h-px flex-1 bg-border/60" />
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  icon="fingerprint"
+                  className="w-full"
+                  loading={passkeyLoading}
+                  disabled={retryAfter > 0}
+                  onClick={handlePasskeyLogin}
+                >
+                  Continue with passkey
+                </Button>
+              </>
             )}
           </div>
           )}

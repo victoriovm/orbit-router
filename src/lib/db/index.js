@@ -32,6 +32,12 @@ export {
   getApiKeys, getApiKeyById, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
 } from "./repos/apiKeysRepo.js";
 
+// Passkeys
+export {
+  getPasskeys, getPasskeyCount, getPasskeyByCredentialId,
+  createPasskey, updatePasskeyUsage, deletePasskey,
+} from "./repos/passkeysRepo.js";
+
 // Combos
 export {
   getCombos, getComboById, getComboByName,
@@ -78,6 +84,7 @@ export async function exportDb() {
     providerNodes: db.all(`SELECT * FROM providerNodes`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, type: r.type, name: r.name, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     proxyPools: db.all(`SELECT * FROM proxyPools`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, isActive: r.isActive === 1, testStatus: r.testStatus, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     apiKeys: db.all(`SELECT * FROM apiKeys`).map((r) => ({ id: r.id, key: r.key, name: r.name, machineId: r.machineId, isActive: r.isActive === 1, createdAt: r.createdAt })),
+    passkeys: db.all(`SELECT * FROM passkeys`).map((r) => ({ credentialId: r.credentialId, publicKey: r.publicKey, counter: Number(r.counter) || 0, transports: parseJson(r.transports, []), deviceType: r.deviceType, backedUp: r.backedUp === 1, name: r.name, createdAt: r.createdAt, lastUsedAt: r.lastUsedAt })),
     combos: db.all(`SELECT * FROM combos`).map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), createdAt: r.createdAt, updatedAt: r.updatedAt })),
     modelAliases: {},
     customModels: [],
@@ -106,6 +113,7 @@ export async function importDb(payload) {
     db.run(`DELETE FROM providerNodes`);
     db.run(`DELETE FROM proxyPools`);
     db.run(`DELETE FROM apiKeys`);
+    db.run(`DELETE FROM passkeys`);
     db.run(`DELETE FROM combos`);
     db.run(`DELETE FROM kv WHERE scope IN ('modelAliases', 'customModels', 'mitmAlias', 'pricing')`);
 
@@ -139,6 +147,12 @@ export async function importDb(payload) {
       db.run(
         `INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, createdAt) VALUES(?, ?, ?, ?, ?, ?)`,
         [k.id, k.key, k.name || null, k.machineId || null, k.isActive === false ? 0 : 1, k.createdAt || new Date().toISOString()]
+      );
+    }
+    for (const passkey of payload.passkeys || []) {
+      db.run(
+        `INSERT OR REPLACE INTO passkeys(credentialId, publicKey, counter, transports, deviceType, backedUp, name, createdAt, lastUsedAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [passkey.credentialId, passkey.publicKey, Number(passkey.counter) || 0, stringifyJson(passkey.transports || []), passkey.deviceType || null, passkey.backedUp ? 1 : 0, passkey.name || "Passkey", passkey.createdAt || new Date().toISOString(), passkey.lastUsedAt || null]
       );
     }
     for (const c of payload.combos || []) {

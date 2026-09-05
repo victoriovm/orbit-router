@@ -1,15 +1,16 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useSyncExternalStore } from "react";
+import { browserSupportsWebAuthn, startRegistration } from "@simplewebauthn/browser";
 import { Card, Button, Toggle, Input } from "@/shared/components";
 import Modal from "@/shared/components/Modal";
-import LanguageSwitcher from "@/shared/components/LanguageSwitcher";
 import { useTheme } from "@/shared/hooks/useTheme";
 import { cn } from "@/shared/utils/cn";
 import { APP_CONFIG } from "@/shared/constants/config";
-import { LOCALE_COOKIE, normalizeLocale } from "@/i18n/config";
-import { LOCALE_FLAGS } from "@/shared/constants/locales";
+import { LOCALES, LOCALE_COOKIE, LOCALE_NAMES, normalizeLocale } from "@/i18n/config";
+import { onLocaleChange, reloadTranslations } from "@/i18n/runtime";
 import GitUpdateCard from "./components/GitUpdateCard";
+import SettingsCardHeader from "./components/SettingsCardHeader";
 
 function getLocaleFromCookie() {
   if (typeof document === "undefined") return "en";
@@ -22,13 +23,18 @@ function getLocaleFromCookie() {
 
 export default function ProfilePage() {
   const { theme, setTheme, isDark } = useTheme();
-  const [locale, setLocale] = useState(() => getLocaleFromCookie());
-  const [langOpen, setLangOpen] = useState(false);
+  const locale = useSyncExternalStore(onLocaleChange, getLocaleFromCookie, () => "en");
+  const [localeLoading, setLocaleLoading] = useState(false);
+  const [localeMenuOpen, setLocaleMenuOpen] = useState(false);
+  const localeMenuRef = useRef(null);
   const [settings, setSettings] = useState({ fallbackStrategy: "fill-first" });
   const [loading, setLoading] = useState(true);
   const [passwords, setPasswords] = useState({ current: "", new: "", confirm: "" });
   const [passStatus, setPassStatus] = useState({ type: "", message: "" });
   const [passLoading, setPassLoading] = useState(false);
+  const [passkeys, setPasskeys] = useState([]);
+  const [passkeyLoading, setPasskeyLoading] = useState(true);
+  const [passkeyStatus, setPasskeyStatus] = useState({ type: "", message: "" });
   const [dbLoading, setDbLoading] = useState(false);
   const [dbStatus, setDbStatus] = useState({ type: "", message: "" });
   const [dbAuth, setDbAuth] = useState({ open: false, mode: "", password: "" });
@@ -127,6 +133,17 @@ export default function ProfilePage() {
         console.error("Failed to fetch settings:", err);
         setLoading(false);
       });
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/auth/passkeys", { cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Failed to load passkeys");
+        setPasskeys(data.passkeys || []);
+      })
+      .catch((error) => setPasskeyStatus({ type: "error", message: error.message }))
+      .finally(() => setPasskeyLoading(false));
   }, []);
 
   const updateOutboundProxy = async (e) => {
@@ -258,6 +275,64 @@ export default function ProfilePage() {
       setPassStatus({ type: "error", message: "An error occurred" });
     } finally {
       setPassLoading(false);
+    }
+  };
+
+  const handleAddPasskey = async () => {
+    setPasskeyStatus({ type: "", message: "" });
+    if (!browserSupportsWebAuthn()) {
+      setPasskeyStatus({ type: "error", message: "Passkeys are not supported by this browser." });
+      return;
+    }
+
+    setPasskeyLoading(true);
+    try {
+      const optionsResponse = await fetch("/api/auth/passkeys/register/options", {
+        method: "POST",
+      });
+      const options = await optionsResponse.json();
+      if (!optionsResponse.ok) throw new Error(options.error || "Failed to start passkey registration");
+
+      const credential = await startRegistration({ optionsJSON: options });
+      const verificationResponse = await fetch("/api/auth/passkeys/register/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential }),
+      });
+      const verification = await verificationResponse.json();
+      if (!verificationResponse.ok) throw new Error(verification.error || "Failed to register passkey");
+
+      setPasskeys((current) => [...current, verification.passkey]);
+      setPasskeyStatus({ type: "success", message: "Passkey added successfully" });
+    } catch (passkeyError) {
+      setPasskeyStatus({
+        type: "error",
+        message: passkeyError?.name === "NotAllowedError"
+          ? "Passkey registration was cancelled or timed out."
+          : passkeyError.message || "Failed to register passkey",
+      });
+    } finally {
+      setPasskeyLoading(false);
+    }
+  };
+
+  const handleDeletePasskey = async (passkey) => {
+    if (!window.confirm(`Remove ${passkey.name}?`)) return;
+    setPasskeyLoading(true);
+    setPasskeyStatus({ type: "", message: "" });
+
+    try {
+      const response = await fetch(`/api/auth/passkeys/${encodeURIComponent(passkey.id)}`, {
+        method: "DELETE",
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to delete passkey");
+      setPasskeys((current) => current.filter((item) => item.id !== passkey.id));
+      setPasskeyStatus({ type: "success", message: "Passkey removed" });
+    } catch (error) {
+      setPasskeyStatus({ type: "error", message: error.message });
+    } finally {
+      setPasskeyLoading(false);
     }
   };
 
@@ -751,118 +826,221 @@ export default function ProfilePage() {
     }
   };
 
+  useEffect(() => {
+    if (!localeMenuOpen) return;
+
+    const handlePointerDown = (event) => {
+      if (localeMenuRef.current && !localeMenuRef.current.contains(event.target)) {
+        setLocaleMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setLocaleMenuOpen(false);
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [localeMenuOpen]);
+
+  const handleLocaleChange = async (value) => {
+    const nextLocale = normalizeLocale(value);
+    if (nextLocale === locale || localeLoading) return;
+
+    setLocaleMenuOpen(false);
+    setLocaleLoading(true);
+    try {
+      const response = await fetch("/api/locale", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locale: nextLocale }),
+      });
+      if (!response.ok) throw new Error("Failed to update language");
+
+      await reloadTranslations();
+    } catch (error) {
+      console.error("Failed to set locale:", error);
+    } finally {
+      setLocaleLoading(false);
+    }
+  };
+
   return (
-    <div className="max-w-2xl mx-auto px-4 sm:px-0">
+    <div className="w-full px-1 sm:px-0">
       <div className="flex flex-col gap-6">
-        {/* Local Mode Info */}
-        <Card>
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
-            <div className="flex items-center gap-3 sm:gap-4">
-              <div className="size-10 sm:size-12 rounded-lg bg-green-500/10 text-green-500 flex items-center justify-center shrink-0">
-                <span className="material-symbols-outlined text-xl sm:text-2xl">computer</span>
-              </div>
-              <div>
-                <h2 className="text-lg sm:text-xl font-semibold">Local Mode</h2>
-                <p className="text-sm text-text-muted">Running on your machine</p>
-              </div>
-            </div>
-            <div className="inline-flex p-1 rounded-lg bg-black/5 dark:bg-white/5 w-full sm:w-auto">
-              {["light", "dark", "system"].map((option) => (
+        <div className="grid grid-cols-1 gap-6">
+          {/* Theme */}
+          <Card className="h-full">
+            <SettingsCardHeader
+              icon="palette"
+              title="Theme"
+              subtitle="Choose your preferred appearance"
+              className="mb-4"
+            />
+            <div className="grid w-full grid-cols-3 gap-1 rounded-lg bg-black/5 p-1 dark:bg-white/5">
+              {[
+                { value: "light", label: "Light", icon: "light_mode" },
+                { value: "dark", label: "Dark", icon: "dark_mode" },
+                { value: "system", label: "System", icon: "brightness_medium" },
+              ].map((option) => (
                 <button
-                  key={option}
+                  key={option.value}
                   type="button"
-                  onClick={() => setTheme(option)}
+                  onClick={() => setTheme(option.value)}
                   className={cn(
-                    "flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-md font-medium transition-all flex-1 sm:flex-initial",
-                    theme === option
+                    "flex min-w-0 items-center justify-center gap-1 rounded-md px-2 py-2 font-medium transition-all",
+                    theme === option.value
                       ? "bg-white dark:bg-white/10 text-text-main shadow-sm"
                       : "text-text-muted hover:text-text-main"
                   )}
                 >
-                  <span className="material-symbols-outlined text-[18px]">
-                    {option === "light" ? "light_mode" : option === "dark" ? "dark_mode" : "contrast"}
-                  </span>
-                  <span className="capitalize text-xs sm:text-sm">{option}</span>
+                  <span className="material-symbols-outlined text-[18px] leading-none">{option.icon}</span>
+                  <span className="truncate text-xs">{option.label}</span>
                 </button>
               ))}
             </div>
-          </div>
-          <div className="flex flex-col gap-3 pt-4 border-t border-border">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 rounded-lg bg-bg border border-border gap-2">
-              <div>
-                <p className="font-medium text-sm sm:text-base">Database Location</p>
-                <p className="text-xs sm:text-sm text-text-muted font-mono break-all">~/.9router/db/data.sqlite</p>
+          </Card>
+
+          {/* Database */}
+          <Card className="h-full">
+            <SettingsCardHeader
+              icon="database"
+              title="Database"
+              subtitle="Local data and backups"
+              tone="blue"
+              className="mb-4"
+            />
+            <div className="flex flex-col gap-3">
+              <div className="rounded-lg border border-border bg-bg p-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-2">
+                    <span className="material-symbols-outlined text-[20px] leading-none text-text-muted">folder_open</span>
+                  </div>
+                  <div className="flex min-h-10 min-w-0 flex-col justify-center">
+                    <p className="text-sm font-medium leading-5 sm:text-base">Database Location</p>
+                    <p className="break-all font-mono text-xs leading-5 text-text-muted sm:text-sm">~/.9router/db/data.sqlite</p>
+                  </div>
+                </div>
               </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant="secondary"
+                  icon="download"
+                  onClick={() => setDbAuth({ open: true, mode: "export", password: "" })}
+                  loading={dbLoading}
+                  className="w-full"
+                >
+                  Download Backup
+                </Button>
+                <Button
+                  variant="outline"
+                  icon="upload"
+                  onClick={() => importFileRef.current?.click()}
+                  disabled={dbLoading}
+                  className="w-full"
+                >
+                  Import Backup
+                </Button>
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={handleImportDatabase}
+                />
+              </div>
+              {dbStatus.message && (
+                <p className={`text-sm ${dbStatus.type === "error" ? "text-red-500" : "text-green-600 dark:text-green-400"}`}>
+                  {dbStatus.message}
+                </p>
+              )}
             </div>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <Button
-                variant="secondary"
-                icon="download"
-                onClick={() => setDbAuth({ open: true, mode: "export", password: "" })}
-                loading={dbLoading}
-                className="w-full sm:w-auto"
-              >
-                Download Backup
-              </Button>
-              <Button
-                variant="outline"
-                icon="upload"
-                onClick={() => importFileRef.current?.click()}
-                disabled={dbLoading}
-                className="w-full sm:w-auto"
-              >
-                Import Backup
-              </Button>
-              <input
-                ref={importFileRef}
-                type="file"
-                accept="application/json,.json"
-                className="hidden"
-                onChange={handleImportDatabase}
-              />
-            </div>
-            {dbStatus.message && (
-              <p className={`text-sm ${dbStatus.type === "error" ? "text-red-500" : "text-green-600 dark:text-green-400"}`}>
-                {dbStatus.message}
-              </p>
-            )}
-          </div>
-        </Card>
+          </Card>
+        </div>
 
         <GitUpdateCard />
 
         {/* Language */}
         <Card>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="size-10 rounded-lg bg-blue-500/10 text-blue-500 flex items-center justify-center shrink-0">
-              <span className="material-symbols-outlined text-[20px]">language</span>
-            </div>
-            <h3 className="text-base sm:text-lg font-semibold">Language</h3>
+          <SettingsCardHeader
+            icon="language"
+            title="Language"
+            subtitle="Choose the dashboard language"
+            tone="blue"
+            className="mb-4"
+          />
+          <div ref={localeMenuRef} className="relative" data-i18n-skip="true">
+            <p className="mb-2 text-xs font-medium text-text-muted">Display language</p>
+            <button
+              type="button"
+              onClick={() => setLocaleMenuOpen((current) => !current)}
+              disabled={localeLoading}
+              aria-haspopup="listbox"
+              aria-expanded={localeMenuOpen}
+              className={`flex h-14 w-full items-center gap-3 rounded-xl border bg-bg px-3 text-left transition-colors disabled:cursor-wait disabled:opacity-60 ${localeMenuOpen ? "border-primary ring-1 ring-primary/20" : "border-border hover:border-primary/40"}`}
+            >
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-surface text-primary">
+                <span className="material-symbols-outlined text-[20px]">g_translate</span>
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-text-main">{LOCALE_NAMES[locale]}</span>
+                <span className="block text-[10px] uppercase tracking-wide text-text-muted">{locale}</span>
+              </span>
+              <span className={`material-symbols-outlined text-[18px] text-text-muted transition-transform ${localeMenuOpen ? "rotate-180" : ""}`}>
+                expand_more
+              </span>
+            </button>
+
+            {localeMenuOpen && (
+              <div
+                role="listbox"
+                aria-label="Display language"
+                className="absolute z-30 mt-2 w-full overflow-hidden rounded-xl border border-border bg-surface p-1.5 shadow-[var(--shadow-elev)]"
+              >
+                {LOCALES.map((localeOption) => {
+                  const selected = localeOption === locale;
+                  return (
+                    <button
+                      key={localeOption}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      onClick={() => handleLocaleChange(localeOption)}
+                      className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors ${selected ? "bg-primary/10 text-primary" : "text-text-main hover:bg-bg-hover"}`}
+                    >
+                      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-bg text-primary">
+                        <span className="material-symbols-outlined text-[20px]">g_translate</span>
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{LOCALE_NAMES[localeOption]}</span>
+                        <span className="block text-[10px] uppercase tracking-wide text-text-muted">{localeOption}</span>
+                      </span>
+                      {selected && <span className="material-symbols-outlined text-[17px]">check</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
-          <button
-            onClick={() => setLangOpen(true)}
-            className="flex items-center justify-between w-full p-3 rounded-lg bg-bg border border-border hover:border-primary/50 transition-colors"
-            data-i18n-skip="true"
-          >
-            <span className="text-sm text-text-muted">Display language</span>
-            <span className="text-2xl">{LOCALE_FLAGS[locale] || "🌐"}</span>
-          </button>
         </Card>
 
         {/* Security */}
         <Card>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 rounded-lg bg-primary/10 text-primary shrink-0">
-              <span className="material-symbols-outlined text-[20px]">shield</span>
-            </div>
-            <h3 className="text-base sm:text-lg font-semibold">Security</h3>
-          </div>
+          <SettingsCardHeader
+            icon="shield"
+            title="Security"
+            subtitle="Protect access to the dashboard"
+            className="mb-4"
+          />
           <div className="flex flex-col gap-4">
             <div className="flex items-start sm:items-center justify-between gap-4">
               <div className="flex-1 min-w-0">
                 <p className="font-medium text-sm sm:text-base">Require login</p>
                 <p className="text-xs sm:text-sm text-text-muted">
-                  When ON, dashboard requires password. When OFF, access without login.
+                  When ON, dashboard requires password, passkey, or SSO. When OFF, access without login.
                 </p>
               </div>
               <Toggle
@@ -922,11 +1100,83 @@ export default function ProfilePage() {
                 )}
 
                 <div className="pt-2">
-                  <Button type="submit" variant="primary" loading={passLoading} className="w-full sm:w-auto">
+                  <Button type="submit" variant="primary" loading={passLoading} className="w-full">
                     {settings.hasPassword ? "Update Password" : "Set Password"}
                   </Button>
                 </div>
               </form>
+            )}
+          </div>
+        </Card>
+
+        {/* Passkeys */}
+        <Card>
+          <SettingsCardHeader
+            icon="fingerprint"
+            title="Passkeys"
+            subtitle="Sign in securely with your device, fingerprint, or face"
+            tone="purple"
+            className="mb-4"
+          />
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-bg px-3 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-text-main">Registered passkeys</p>
+                <p className="text-xs text-text-muted">Use a passkey instead of entering your password.</p>
+              </div>
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-sm font-semibold text-primary">
+                {passkeys.length}
+              </span>
+            </div>
+
+            {passkeys.length > 0 && (
+              <div className="flex flex-col gap-2" data-i18n-skip="true">
+                {passkeys.map((passkey) => (
+                  <div key={passkey.id} className="flex items-center gap-3 rounded-xl border border-border bg-bg p-2.5">
+                    <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-text-muted">
+                      <span className="material-symbols-outlined text-[18px]">passkey</span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-text-main">{passkey.name}</p>
+                      <p className="text-[11px] text-text-muted">
+                        Added {new Date(passkey.createdAt).toLocaleDateString()}
+                        {passkey.lastUsedAt ? ` · Used ${new Date(passkey.lastUsedAt).toLocaleDateString()}` : ""}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePasskey(passkey)}
+                      disabled={passkeyLoading}
+                      aria-label={`Remove ${passkey.name}`}
+                      className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-red-500/25 bg-red-500/5 text-red-500 transition-colors hover:bg-red-500/10 disabled:cursor-wait disabled:opacity-50"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">delete</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <Button
+              type="button"
+              variant="primary"
+              icon="add"
+              className="w-full"
+              loading={passkeyLoading}
+              disabled={settings.requireLogin !== true}
+              onClick={handleAddPasskey}
+            >
+              Add passkey
+            </Button>
+
+            {settings.requireLogin !== true && (
+              <p className="text-xs text-text-muted">Enable Require login before adding a passkey.</p>
+            )}
+
+            {passkeyStatus.message && (
+              <p className={`text-xs ${passkeyStatus.type === "error" ? "text-red-500" : "text-green-500"}`}>
+                {passkeyStatus.message}
+              </p>
             )}
           </div>
         </Card>
@@ -938,19 +1188,17 @@ export default function ProfilePage() {
             onClick={() => setOidcExpanded((v) => !v)}
             className="w-full flex items-center gap-3 text-left"
           >
-            <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-500 shrink-0">
-              <span className="material-symbols-outlined text-[20px]">lock_open</span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <h3 className="text-base sm:text-lg font-semibold">Single Sign-On (SSO)</h3>
-              <p className="text-xs text-text-muted">
-                {settings.authMode === "sso" || settings.authMode === "oidc" || settings.authMode === "saml"
+            <SettingsCardHeader
+              icon="lock_open"
+              title="Single Sign-On (SSO)"
+              tone="purple"
+              className="flex-1"
+              subtitle={settings.authMode === "sso" || settings.authMode === "oidc" || settings.authMode === "saml"
                   ? `${settings.ssoType === "saml" ? "SAML 2.0" : "OIDC"} SSO active`
                   : settings.authMode === "both"
                     ? `Password + ${settings.ssoType === "saml" ? "SAML 2.0" : "OIDC"} active`
                     : "Optional SSO via Okta, Entra ID, Keycloak, or OIDC"}
-              </p>
-            </div>
+            />
             <span className="material-symbols-outlined text-text-muted shrink-0">
               {oidcExpanded ? "expand_less" : "expand_more"}
             </span>
@@ -1427,12 +1675,13 @@ export default function ProfilePage() {
 
         {/* Routing Preferences */}
         <Card>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 rounded-lg bg-blue-500/10 text-blue-500 shrink-0">
-              <span className="material-symbols-outlined text-[20px]">route</span>
-            </div>
-            <h3 className="text-base sm:text-lg font-semibold">Routing Strategy</h3>
-          </div>
+          <SettingsCardHeader
+            icon="route"
+            title="Routing Strategy"
+            subtitle="Control how requests use available accounts"
+            tone="blue"
+            className="mb-4"
+          />
           <div className="flex flex-col gap-4">
             <div className="flex items-start sm:items-center justify-between gap-4">
               <div className="flex-1 min-w-0">
@@ -1518,12 +1767,13 @@ export default function ProfilePage() {
 
         {/* Network */}
         <Card>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 rounded-lg bg-purple-500/10 text-purple-500 shrink-0">
-              <span className="material-symbols-outlined text-[20px]">wifi</span>
-            </div>
-            <h3 className="text-base sm:text-lg font-semibold">Network</h3>
-          </div>
+          <SettingsCardHeader
+            icon="lan"
+            title="Network"
+            subtitle="Configure outbound proxy connections"
+            tone="purple"
+            className="mb-4"
+          />
 
           <div className="flex flex-col gap-4">
             <div className="flex items-start sm:items-center justify-between gap-4">
@@ -1590,12 +1840,13 @@ export default function ProfilePage() {
 
         {/* Observability Settings */}
         <Card>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 rounded-lg bg-orange-500/10 text-orange-500 shrink-0">
-              <span className="material-symbols-outlined text-[20px]">monitoring</span>
-            </div>
-            <h3 className="text-base sm:text-lg font-semibold">Observability</h3>
-          </div>
+          <SettingsCardHeader
+            icon="query_stats"
+            title="Observability"
+            subtitle="Control request logging and diagnostics"
+            tone="orange"
+            className="mb-4"
+          />
           <div className="flex items-start sm:items-center justify-between gap-4">
             <div className="flex-1 min-w-0">
               <p className="font-medium text-sm sm:text-base">Enable Observability</p>
@@ -1629,15 +1880,6 @@ export default function ProfilePage() {
           <p className="mt-1">{isRemoteHost ? "Remote Mode" : "Local Mode - All data stored on your machine"}</p>
         </div>
       </div>
-
-      <LanguageSwitcher
-        hideTrigger
-        isOpen={langOpen}
-        onClose={(next) => {
-          setLangOpen(false);
-          setLocale(next);
-        }}
-      />
 
       <Modal
         isOpen={dbAuth.open}

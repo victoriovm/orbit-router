@@ -1,9 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
-import { UsageStats, RequestLogger, CardSkeleton, SegmentedControl } from "@/shared/components";
-import RequestDetailsTab from "./components/RequestDetailsTab";
+import { UsageStats, CardSkeleton, SegmentedControl } from "@/shared/components";
 
 const PERIODS = [
   { value: "today", label: "Today" },
@@ -22,54 +20,32 @@ export default function UsagePage() {
 }
 
 function UsageContent() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-
   const [period, setPeriod] = useState("today");
-
-  const tabFromUrl = searchParams.get("tab");
-  const activeTab = tabFromUrl && ["overview", "logs", "details"].includes(tabFromUrl)
-    ? tabFromUrl
-    : "overview";
-
-  const handleTabChange = (value) => {
-    if (value === activeTab) return;
-    const params = new URLSearchParams(searchParams);
-    params.set("tab", value);
-    router.push(`/dashboard/usage?${params.toString()}`, { scroll: false });
-  };
 
   return (
     <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
-      {/* Tabs + period selector on same row */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
+            <span className="material-symbols-outlined usage-panel-header-icon">monitoring</span>
+          </div>
+          <div className="min-w-0">
+            <h2 className="truncate text-lg font-semibold text-text-main">Usage overview</h2>
+            <p className="truncate text-xs text-text-muted">Requests, tokens, and estimated costs</p>
+          </div>
+        </div>
         <SegmentedControl
-          options={[
-            { value: "overview", label: "Overview" },
-            { value: "details", label: "Details" },
-          ]}
-          value={activeTab}
-          onChange={handleTabChange}
+          options={PERIODS}
+          value={period}
+          onChange={setPeriod}
+          size="sm"
           className="w-full sm:w-auto"
         />
-        {activeTab === "overview" && (
-          <SegmentedControl
-            options={PERIODS}
-            value={period}
-            onChange={setPeriod}
-            size="sm"
-            className="w-full sm:w-auto"
-          />
-        )}
       </div>
 
-      {activeTab === "overview" && (
-        <Suspense fallback={<CardSkeleton />}>
-          <UsageStats period={period} setPeriod={setPeriod} hidePeriodSelector />
-        </Suspense>
-      )}
-      {activeTab === "logs" && <RequestLogger />}
-      {activeTab === "details" && <RequestDetailsTab />}
+      <Suspense fallback={<CardSkeleton />}>
+        <UsageStats period={period} setPeriod={setPeriod} hidePeriodSelector />
+      </Suspense>
     </div>
   );
 }

@@ -1,0 +1,17 @@
+<svg width="320" height="72" viewBox="0 0 320 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="4" y="4" width="64" height="64" rx="16" fill="url(#paint0_linear)"/>
+  <ellipse cx="36" cy="36" rx="21" ry="10.5" transform="rotate(-24 36 36)" stroke="white" stroke-width="3"/>
+  <ellipse cx="36" cy="36" rx="10.5" ry="21" transform="rotate(24 36 36)" stroke="#DDD6FE" stroke-width="2.5" stroke-opacity="0.85"/>
+  <circle cx="36" cy="36" r="7" fill="white"/>
+  <circle cx="53.5" cy="26.5" r="3.5" fill="#F5F3FF"/>
+  <circle cx="23" cy="51" r="3" fill="#EDE9FE"/>
+  <circle cx="33" cy="15.5" r="2.75" fill="white"/>
+  <text x="84" y="45" fill="#111827" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="-0.8">Orbit Router</text>
+  <defs>
+    <linearGradient id="paint0_linear" x1="11" y1="9" x2="62" y2="65" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A78BFA"/>
+      <stop offset="0.52" stop-color="#7C3AED"/>
+      <stop offset="1" stop-color="#4C1D95"/>
+    </linearGradient>
+  </defs>
+</svg>

@@ -3,14 +3,18 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Card from "@/shared/components/Card";
+import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "@/shared/constants/models";
 import { getCurrentLocale, onLocaleChange, translate } from "@/i18n/runtime";
-import UsageChart from "./usage/components/UsageChart";
+import dynamic from "next/dynamic";
+const UsageChart = dynamic(() => import("./usage/components/UsageChart"), { ssr: false, loading: () => null });
 
 const quickLinks = [
   { href: "/dashboard/endpoint", label: "Configure endpoint", icon: "key" },
   { href: "/dashboard/providers", label: "Manage providers", icon: "dns" },
   { href: "/dashboard/usage", label: "View detailed usage", icon: "bar_chart" },
   { href: "/dashboard/combos", label: "Configure combos", icon: "merge_type" },
+  { href: "/dashboard/cli-tools", label: "CLI Tools", icon: "code" },
+  { href: "/dashboard/proxy-pools", label: "Proxy Pools", icon: "android_wifi_4_bar_lock" },
 ];
 
 function getEffectiveStatus(connection) {
@@ -57,7 +61,9 @@ export default function InicioPageClient() {
   const [connections, setConnections] = useState(null);
   const [models, setModels] = useState(null);
   const [failedSources, setFailedSources] = useState([]);
+  const [cachedModelsCount, setCachedModelsCount] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [modelsLoading, setModelsLoading] = useState(true);
   const [locale, setLocale] = useState(() => getCurrentLocale());
 
   useEffect(() => onLocaleChange(() => setLocale(getCurrentLocale())), []);
@@ -74,40 +80,90 @@ export default function InicioPageClient() {
   useEffect(() => {
     let cancelled = false;
 
-    const loadOverview = async () => {
+    const fetchWithTimeout = async (url, timeoutMs) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) throw new Error(String(response.status));
+        return response.json();
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    const loadEssential = async () => {
       const sources = [
-        ["usage statistics", "/api/usage/stats?period=today"],
-        ["providers", "/api/providers"],
-        ["models", "/api/models/catalog"],
+        ["usage statistics", "/api/usage/stats?period=today", 4000],
+        ["providers", "/api/providers", 4000],
       ];
       const results = await Promise.allSettled(
-        sources.map(async ([, url]) => {
-          const response = await fetch(url);
-          if (!response.ok) throw new Error(String(response.status));
-          return response.json();
-        }),
+        sources.map(async ([label, url, timeout]) => fetchWithTimeout(url, timeout)),
       );
 
       if (cancelled) return;
 
       const failures = [];
-      results.forEach((result, index) => {
-        if (result.status === "rejected") failures.push(sources[index][0]);
-      });
-
       if (results[0].status === "fulfilled") setUsage(results[0].value);
+      else failures.push(sources[0][0]);
       if (results[1].status === "fulfilled") setConnections(results[1].value.connections || []);
-      if (results[2].status === "fulfilled") {
-        setModels((results[2].value.data || []).filter((model) => !model.disabled));
-      }
-      setFailedSources(failures);
+      else failures.push(sources[1][0]);
+
+      if (failures.length) setFailedSources((prev) => [...prev, ...failures]);
       setLoading(false);
     };
 
-    loadOverview();
+    const loadModels = async () => {
+      // Fast path for home counter: ~50ms, no live resolvers
+      try {
+        const data = await fetchWithTimeout("/api/models/catalog?fast=1", 1500);
+        if (cancelled) return;
+        const filtered = (data.data || []).filter((model) => !model.disabled);
+        setModels(filtered);
+        setCachedModelsCount(filtered.length);
+        try { window.localStorage.setItem("homeModelsCount", String(filtered.length)); } catch {}
+        setModelsLoading(false);
+        // Background refresh with full catalog (live resolvers) without blocking UI
+        fetchWithTimeout("/api/models/catalog", 5000).then((full) => {
+          if (cancelled) return;
+          const fullFiltered = (full.data || []).filter((m) => !m.disabled);
+          if (fullFiltered.length !== filtered.length) { setModels(fullFiltered); setCachedModelsCount(fullFiltered.length); try { window.localStorage.setItem("homeModelsCount", String(fullFiltered.length)); } catch {} }
+        }).catch(() => {});
+        return;
+      } catch {}
+      // Fallback: try full catalog if fast failed
+      try {
+        const data = await fetchWithTimeout("/api/models/catalog", 5000);
+        if (cancelled) return;
+        const _m = (data.data || []).filter((model) => !model.disabled);
+        setModels(_m);
+        setCachedModelsCount(_m.length);
+        try { window.localStorage.setItem("homeModelsCount", String(_m.length)); } catch {}
+      } catch {
+        if (cancelled) return;
+        setModels([]);
+        setFailedSources((prev) => (prev.includes("models") ? prev : [...prev, "models"]));
+      } finally {
+        if (!cancelled) setModelsLoading(false);
+      }
+    };
+
+    loadEssential();
+    loadModels();
+
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem("homeModelsCount");
+      if (v) {
+        const n = parseInt(v, 10);
+        if (Number.isFinite(n) && n >= 0) setCachedModelsCount(n);
+      }
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -162,6 +218,33 @@ export default function InicioPageClient() {
     };
   }, [connections]);
 
+  const estimatedModelsCount = useMemo(() => {
+    if (models !== null) return null;
+    if (cachedModelsCount !== null && !connections) return cachedModelsCount;
+    if (!connections) return cachedModelsCount ?? 0;
+    let count = 0;
+    for (const conn of connections.filter((c) => c.isActive !== false)) {
+      const pid = conn.provider;
+      const staticModels = PROVIDER_MODELS[pid] || PROVIDER_MODELS[PROVIDER_ID_TO_ALIAS[pid]] || [];
+      const enabled = conn.providerSpecificData?.enabledModels;
+      if (Array.isArray(enabled) && enabled.length > 0) count += enabled.filter((id) => typeof id === "string" && id.trim() !== "").length;
+      else count += staticModels.length;
+    }
+    if (cachedModelsCount !== null && count === 0) return cachedModelsCount;
+    return count;
+  }, [connections, models, cachedModelsCount]);
+
+  const displayModelsCount = models !== null ? models.length : (estimatedModelsCount ?? cachedModelsCount ?? 0);
+  const displayModelsLoading = false;
+
+  const allEnabledAccountsHealthy = providerStats.healthyAccounts === providerStats.enabledAccounts;
+  const allEnabledAccountsUnhealthy = providerStats.healthyAccounts === 0;
+  const providerHealthIndicator = allEnabledAccountsHealthy
+    ? { icon: "check_circle", color: "text-success" }
+    : allEnabledAccountsUnhealthy
+      ? { icon: "cancel", color: "text-danger" }
+      : { icon: "warning", color: "text-warning" };
+
   const activeRequests = (usage?.activeRequests || []).reduce(
     (total, request) => total + Number(request.count || 0),
     0,
@@ -181,31 +264,35 @@ export default function InicioPageClient() {
       )}
 
       <section aria-label={translate("Gateway overview")} className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
-        <MetricCard label={translate("Providers")} value={providerStats.providers} detail={translate("configured")} icon="dns" loading={loading && connections === null} />
-        <MetricCard label={translate("Models")} value={numberFormatter.format(models?.length || 0)} detail={translate("Visible in /v1/models")} icon="deployed_code" loading={loading && models === null} />
+        <MetricCard label={translate("Providers")} value={providerStats.providers} detail={translate("Connected")} icon="dns" tone="text-orange-500" loading={loading && connections === null} />
+        <MetricCard label={translate("Models")} value={numberFormatter.format(displayModelsCount)} detail={translate("Available")} icon="deployed_code" tone="text-cyan-400" loading={displayModelsLoading} />
         <MetricCard label={translate("Requests")} value={numberFormatter.format(usage?.totalRequests || 0)} detail={translate("Today")} icon="send" tone="text-primary" loading={loading && usage === null} />
-        <MetricCard label={translate("Tokens")} value={numberFormatter.format(tokensToday)} detail={translate("Input + output today")} icon="token" tone="text-info" loading={loading && usage === null} />
-        <MetricCard label={translate("In progress")} value={numberFormatter.format(activeRequests)} detail={translate("Active requests")} icon="progress_activity" tone="text-success" loading={loading && usage === null} />
+        <MetricCard label={translate("Tokens")} value={numberFormatter.format(tokensToday)} detail={translate("Used today")} icon="token" tone="text-info" loading={loading && usage === null} />
+        <MetricCard label={translate("In progress")} value={numberFormatter.format(activeRequests)} detail={translate("Active requests")} icon="design_services" tone="text-success" loading={loading && usage === null} />
       </section>
 
       <section className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
         <div className="min-w-0">
           <UsageChart period="7d" />
         </div>
-        <Card title={translate("Provider health")} subtitle={translate("Enabled account status")} icon="health_and_safety" padding="sm">
+        <Card title={translate("Provider health")} subtitle={translate("Enabled account status")} icon="health_and_safety" padding="sm" className="flex h-full flex-col">
           {loading && connections === null ? (
-            <div className="space-y-3">
+            <div className="flex flex-1 flex-col gap-3">
               {[1, 2, 3].map((item) => <div key={item} className="h-12 animate-pulse rounded bg-bg-subtle" />)}
             </div>
           ) : (
             <div className="space-y-3">
               <div className="rounded-[10px] border border-border-subtle bg-bg p-4">
-                <div className="flex items-end justify-between gap-3">
+                <div className="flex items-center gap-4">
+                  <div className="flex size-14 shrink-0 items-center justify-center rounded-[12px] border border-border bg-surface-2">
+                    <span className={`material-symbols-outlined text-[32px] ${providerHealthIndicator.color}`}>
+                      {providerHealthIndicator.icon}
+                    </span>
+                  </div>
                   <div>
-                    <p className="text-2xl font-bold text-success">{providerStats.healthyAccounts} / {providerStats.enabledAccounts}</p>
+                    <p className={`text-2xl font-bold ${providerHealthIndicator.color}`}>{providerStats.healthyAccounts} / {providerStats.enabledAccounts}</p>
                     <p className="text-xs text-text-muted">{translate("enabled accounts healthy")}</p>
                   </div>
-                  <span className="material-symbols-outlined text-success">check_circle</span>
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-2 text-center">
@@ -217,14 +304,17 @@ export default function InicioPageClient() {
                   <p className="font-bold text-warning">{providerStats.attentionProviders}</p>
                   <p className="text-[11px] text-text-muted">{translate("Attention")}</p>
                 </div>
-                <div className="rounded-[10px] bg-bg-subtle p-3">
-                  <p className="font-bold text-text-muted">{providerStats.disabledProviders}</p>
-                  <p className="text-[11px] text-text-muted">{translate("Disabled")}</p>
+                <div className="rounded-[10px] bg-danger/10 p-3">
+                  <p className="font-bold text-danger">{providerStats.disabledProviders}</p>
+                  <p className="text-[11px] text-danger">{translate("Disabled")}</p>
                 </div>
               </div>
-              <Link href="/dashboard/providers" className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline">
+              <Link
+                href="/dashboard/providers"
+                className="group mt-auto flex w-full items-center justify-center gap-2 rounded-[10px] border border-border-subtle bg-bg px-3 py-2.5 text-center text-sm font-medium text-text-main transition-colors hover:border-primary/30 hover:bg-bg-hover"
+              >
                 {translate("View all providers")}
-                <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
+                <span className="material-symbols-outlined text-[18px] text-text-muted transition-colors group-hover:text-primary">arrow_forward</span>
               </Link>
             </div>
           )}
@@ -252,7 +342,9 @@ export default function InicioPageClient() {
             <div className="divide-y divide-border-subtle">
               {recentRequests.map((request, index) => (
                 <div key={`${request.timestamp}-${request.provider}-${request.model}-${index}`} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
-                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${request.status === "error" ? "bg-danger" : "bg-success"}`} />
+                  <span className="flex size-9 shrink-0 items-center justify-center">
+                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${request.status === "error" ? "bg-danger" : "bg-success"}`} />
+                  </span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-text-main">{request.model || translate("Model not provided")}</p>
                     <p className="truncate text-xs text-text-muted">{request.provider || translate("Provider not provided")}</p>
@@ -275,7 +367,7 @@ export default function InicioPageClient() {
           iconContainerClassName="bg-warning/10 text-warning"
           padding="sm"
         >
-          <nav aria-label={translate("Dashboard shortcuts")} className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+          <nav aria-label={translate("Dashboard shortcuts")} className="flex flex-col gap-2">
             {quickLinks.map((item) => (
               <Link key={item.href} href={item.href} className="group flex items-center gap-3 rounded-[10px] border border-border-subtle bg-bg px-3 py-3 transition-colors hover:border-primary/30 hover:bg-bg-hover">
                 <span className="material-symbols-outlined text-[20px] text-text-muted group-hover:text-primary">{item.icon}</span>
@@ -289,3 +381,5 @@ export default function InicioPageClient() {
     </div>
   );
 }
+
+

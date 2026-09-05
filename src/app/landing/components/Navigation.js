@@ -16,10 +16,8 @@ export default function Navigation() {
           onClick={() => router.push("/")}
           aria-label="Navigate to home"
         >
-          <div className="size-8 rounded bg-linear-to-br from-[#f97815] to-orange-700 flex items-center justify-center text-white">
-            <span className="material-symbols-outlined text-[20px]">hub</span>
-          </div>
-          <h2 className="text-white text-xl font-bold tracking-tight">9Router</h2>
+          <img src="/brand/orbit-router-mark.svg" alt="" aria-hidden="true" className="size-9 rounded-lg" />
+          <h2 className="text-white text-xl font-bold tracking-tight">Orbit Router</h2>
         </button>
 
         {/* Desktop menu */}
@@ -36,7 +34,7 @@ export default function Navigation() {
         <div className="flex items-center gap-4">
           <button 
             onClick={() => router.push("/dashboard")}
-            className="hidden sm:flex h-9 items-center justify-center rounded-lg px-4 bg-[#f97815] hover:bg-[#e0650a] transition-all text-[#181411] text-sm font-bold shadow-[0_0_15px_rgba(249,120,21,0.4)] hover:shadow-[0_0_20px_rgba(249,120,21,0.6)]"
+            className="hidden sm:flex h-9 items-center justify-center rounded-lg px-4 bg-brand-500 hover:bg-brand-600 transition-all text-white text-sm font-bold shadow-[var(--shadow-warm)]"
           >
             Get Started
           </button>
@@ -59,7 +57,7 @@ export default function Navigation() {
             <a className="text-gray-300 hover:text-white text-sm font-medium transition-colors" href="https://github.com/decolua/9router" target="_blank" rel="noopener noreferrer">GitHub</a>
             <button 
               onClick={() => router.push("/dashboard")}
-              className="h-9 rounded-lg bg-[#f97815] hover:bg-[#e0650a] text-[#181411] text-sm font-bold"
+              className="h-9 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-bold"
             >
               Get Started
             </button>

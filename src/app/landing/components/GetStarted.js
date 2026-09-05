@@ -16,20 +16,20 @@ export default function GetStarted() {
           <div className="flex-1">
             <h2 className="text-3xl md:text-4xl font-bold mb-6">Get Started in 30 Seconds</h2>
             <p className="text-gray-400 text-lg mb-8">
-              Install 9Router, configure your providers via web dashboard, and start routing AI requests.
+              Install Orbit Router, configure your providers via web dashboard, and start routing AI requests.
             </p>
             
             <div className="flex flex-col gap-6">
               <div className="flex gap-4">
-                <div className="flex-none w-8 h-8 rounded-full bg-[#f97815]/20 text-[#f97815] flex items-center justify-center font-bold">1</div>
+                <div className="flex-none w-8 h-8 rounded-full bg-brand-500/20 text-brand-300 flex items-center justify-center font-bold">1</div>
                 <div>
-                  <h4 className="font-bold text-lg">Install 9Router</h4>
+                  <h4 className="font-bold text-lg">Install Orbit Router</h4>
                   <p className="text-sm text-gray-500 mt-1">Run npx command to start the server instantly</p>
                 </div>
               </div>
               
               <div className="flex gap-4">
-                <div className="flex-none w-8 h-8 rounded-full bg-[#f97815]/20 text-[#f97815] flex items-center justify-center font-bold">2</div>
+                <div className="flex-none w-8 h-8 rounded-full bg-brand-500/20 text-brand-300 flex items-center justify-center font-bold">2</div>
                 <div>
                   <h4 className="font-bold text-lg">Open Dashboard</h4>
                   <p className="text-sm text-gray-500 mt-1">Configure providers and API keys via web interface</p>
@@ -37,7 +37,7 @@ export default function GetStarted() {
               </div>
               
               <div className="flex gap-4">
-                <div className="flex-none w-8 h-8 rounded-full bg-[#f97815]/20 text-[#f97815] flex items-center justify-center font-bold">3</div>
+                <div className="flex-none w-8 h-8 rounded-full bg-brand-500/20 text-brand-300 flex items-center justify-center font-bold">3</div>
                 <div>
                   <h4 className="font-bold text-lg">Route Requests</h4>
                   <p className="text-sm text-gray-500 mt-1">Point your CLI tools to http://localhost:20128</p>
@@ -71,9 +71,9 @@ export default function GetStarted() {
                 </div>
                 
                 <div className="text-gray-400 mb-6">
-                  <span className="text-[#f97815]">&gt;</span> Starting 9Router...<br/>
-                  <span className="text-[#f97815]">&gt;</span> Server running on <span className="text-blue-400">http://localhost:20128</span><br/>
-                  <span className="text-[#f97815]">&gt;</span> Dashboard: <span className="text-blue-400">http://localhost:20128/dashboard</span><br/>
+                  <span className="text-brand-400">&gt;</span> Starting Orbit Router...<br/>
+                  <span className="text-brand-400">&gt;</span> Server running on <span className="text-blue-400">http://localhost:20128</span><br/>
+                  <span className="text-brand-400">&gt;</span> Dashboard: <span className="text-blue-400">http://localhost:20128/dashboard</span><br/>
                   <span className="text-green-400">&gt;</span> Ready to route! ✓
                 </div>
                 

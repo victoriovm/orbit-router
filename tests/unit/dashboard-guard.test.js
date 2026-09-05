@@ -287,6 +287,44 @@ describe("dashboard guard local-only access", () => {
   });
 });
 
+describe("dashboard guard passkey access", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.NINEROUTER_PEER_TOKEN = PEER_TOKEN;
+    mocks.getSettings.mockResolvedValue({ requireLogin: false });
+    mocks.getConsistentMachineId.mockResolvedValue("cli-token");
+    mocks.verifyDashboardAuthToken.mockResolvedValue(false);
+  });
+
+  it("keeps passkey authentication endpoints public", async () => {
+    const response = await proxy(request("/api/auth/passkeys/authenticate/options", {
+      host: "router.example.com",
+    }));
+
+    expect(response).toBe(mocks.nextResponse);
+  });
+
+  it("requires a dashboard session to manage passkeys", async () => {
+    const response = await proxy(request("/api/auth/passkeys/register/options", {
+      host: "router.example.com",
+    }));
+
+    expect(response.status).toBe(401);
+    expect(response.body.error).toBe("Unauthorized");
+  });
+
+  it("allows passkey management with a valid dashboard session", async () => {
+    mocks.verifyDashboardAuthToken.mockResolvedValue(true);
+    const apiRequest = request("/api/auth/passkeys", { host: "router.example.com" });
+    apiRequest.cookies.get.mockReturnValue({ value: "valid-session" });
+
+    const response = await proxy(apiRequest);
+
+    expect(response).toBe(mocks.nextResponse);
+    expect(mocks.verifyDashboardAuthToken).toHaveBeenCalledWith("valid-session");
+  });
+});
+
 describe("dashboard guard Git update access", () => {
   beforeEach(() => {
     vi.clearAllMocks();

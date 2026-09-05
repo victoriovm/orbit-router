@@ -35,7 +35,7 @@ describe("Schema migrations", () => {
     const tables = db.all(`SELECT name FROM sqlite_master WHERE type='table'`).map(t => t.name);
     expect(tables).toEqual(expect.arrayContaining([
       "_meta", "settings", "providerConnections", "providerNodes",
-      "proxyPools", "apiKeys", "combos", "kv", "usageHistory", "usageDaily", "requestDetails",
+      "proxyPools", "apiKeys", "passkeys", "combos", "kv", "usageHistory", "usageDaily", "requestDetails",
     ]));
   });
 
@@ -96,5 +96,43 @@ describe("Schema migrations", () => {
     const db2 = await getAdapter2();
     const idx = db2.all(`PRAGMA index_list(providerNodes)`).map(i => i.name);
     expect(idx).toContain("idx_pn_type");
+  });
+
+  it("stores and updates passkey credentials", async () => {
+    const {
+      createPasskey,
+      deletePasskey,
+      getPasskeyByCredentialId,
+      getPasskeys,
+      updatePasskeyUsage,
+    } = await import("@/lib/db/repos/passkeysRepo.js");
+
+    await createPasskey({
+      id: "credential-1",
+      publicKey: "public-key",
+      counter: 0,
+      transports: ["internal"],
+      deviceType: "multiDevice",
+      backedUp: true,
+      name: "Passkey 1",
+      createdAt: "2026-08-30T00:00:00.000Z",
+    });
+
+    expect(await getPasskeys()).toHaveLength(1);
+    const stored = await getPasskeyByCredentialId("credential-1");
+    expect(stored.publicKey).toBe("public-key");
+    expect(stored.transports).toEqual(["internal"]);
+
+    const lastUsedAt = await updatePasskeyUsage("credential-1", {
+      counter: 3,
+      deviceType: "multiDevice",
+      backedUp: true,
+    });
+    const updated = await getPasskeyByCredentialId("credential-1");
+    expect(updated.counter).toBe(3);
+    expect(updated.lastUsedAt).toBe(lastUsedAt);
+
+    expect(await deletePasskey("credential-1")).toBe(true);
+    expect(await getPasskeys()).toHaveLength(0);
   });
 });

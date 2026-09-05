@@ -15,6 +15,7 @@ import {
 import { clientPingUrl, clientPingAny } from "./endpointPing";
 import StatusAlert from "./components/StatusAlert";
 import SecurityWarning from "./components/SecurityWarning";
+import SettingsCardHeader from "../profile/components/SettingsCardHeader";
 export default function APIPageClient({ machineId }) {
   const [keys, setKeys] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -71,9 +72,6 @@ export default function APIPageClient({ machineId }) {
   const tsEverReachableRef = useRef(false);
   const [tunnelEverReachable, setTunnelEverReachable] = useState(false);
   const [tsEverReachable, setTsEverReachable] = useState(false);
-
-  // API key visibility toggle state
-  const [visibleKeys, setVisibleKeys] = useState(new Set());
 
   // Client-side local/remote detection (UI hint only, not a security gate)
   const [isRemoteHost, setIsRemoteHost] = useState(false);
@@ -652,11 +650,6 @@ export default function APIPageClient({ machineId }) {
           const res = await fetch(`/api/keys/${id}`, { method: "DELETE" });
           if (res.ok) {
             setKeys(keys.filter((k) => k.id !== id));
-            setVisibleKeys(prev => {
-              const next = new Set(prev);
-              next.delete(id);
-              return next;
-            });
           }
         } catch (error) {
           console.log("Error deleting key:", error);
@@ -685,15 +678,6 @@ export default function APIPageClient({ machineId }) {
     return fullKey.slice(0, 6) + "•".repeat(fullKey.length - 10) + fullKey.slice(-4);
   };
 
-  const toggleKeyVisibility = (keyId) => {
-    setVisibleKeys(prev => {
-      const next = new Set(prev);
-      if (next.has(keyId)) next.delete(keyId);
-      else next.add(keyId);
-      return next;
-    });
-  };
-
   const [baseUrl, setBaseUrl] = useState("/v1");
 
   // Hydration fix: Only access window on client side
@@ -705,150 +689,180 @@ export default function APIPageClient({ machineId }) {
 
   if (loading) {
     return (
-      <div className="flex flex-col gap-8">
-        <CardSkeleton />
-        <CardSkeleton />
+      <div className="w-full px-1 sm:px-0">
+        <div className="flex flex-col gap-6">
+          <CardSkeleton />
+          <CardSkeleton />
+        </div>
       </div>
     );
   }
 
   const currentEndpoint = baseUrl;
-
   return (
-    <div className="flex flex-col gap-8">
-      {/* Endpoint Card */}
-      <Card>
-        <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <span className="material-symbols-outlined text-primary">api</span>
-          API Endpoint
-        </h2>
+    <div className="w-full px-1 sm:px-0">
+      <div className="flex flex-col gap-6">
+        <div className="flex min-w-0 flex-col gap-6">
+          {/* Endpoint Card */}
+          <Card padding="none" className="overflow-hidden">
+            <div className="p-6">
+              <SettingsCardHeader
+                icon="http"
+                title="API Endpoint"
+                subtitle="Connect any OpenAI-compatible client to Orbit Router"
+              />
 
-        <div className="flex items-center gap-2">
-          <Input value={currentEndpoint} readOnly className="flex-1 font-mono text-sm" />
-          <button
-            onClick={() => copy(currentEndpoint, "local_url")}
-            className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-colors shrink-0"
-            title="Copy endpoint"
-          >
-            <span className="material-symbols-outlined text-[18px]">
-              {copied === "local_url" ? "check" : "content_copy"}
-            </span>
-          </button>
-        </div>
-      </Card>
-
-      {/* API Keys */}
-      <Card id="require-api-key">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary">vpn_key</span>
-            API Keys
-          </h2>
-          <Button icon="add" onClick={() => setShowAddModal(true)}>
-            Create Key
-          </Button>
-        </div>
-
-        <div className="flex items-center justify-between pb-4 mb-4 border-b border-border">
-          <div>
-            <p className="font-medium">Require API key</p>
-            <p className="text-sm text-text-muted">
-              Requests without a valid key will be rejected
-            </p>
-          </div>
-          <Toggle
-            checked={requireApiKey}
-            onChange={() => handleRequireApiKey(!requireApiKey)}
-          />
-        </div>
-
-        {isRemoteHost && !requireApiKey && (
-          <div className="mb-4 -mt-2">
-            <SecurityWarning message="Endpoint is exposed without an API key." />
-          </div>
-        )}
-
-        {keys.length === 0 ? (
-          <div className="text-center py-12">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 text-primary mb-4">
-              <span className="material-symbols-outlined text-[32px]">vpn_key</span>
-            </div>
-            <p className="text-text-main font-medium mb-1">No API keys yet</p>
-            <p className="text-sm text-text-muted mb-4">Create your first API key to get started</p>
-            <Button icon="add" onClick={() => setShowAddModal(true)}>
-              Create Key
-            </Button>
-          </div>
-        ) : (
-          <div className="flex flex-col">
-            {keys.map((key) => (
-              <div
-                key={key.id}
-                className={`group flex items-center justify-between py-3 border-b border-black/[0.03] dark:border-white/[0.03] last:border-b-0 ${key.isActive === false ? "opacity-60" : ""}`}
-              >
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{key.name}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <code className="text-xs text-text-muted font-mono">
-                      {visibleKeys.has(key.id) ? key.key : maskKey(key.key)}
-                    </code>
-                    <button
-                      onClick={() => toggleKeyVisibility(key.id)}
-                      className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
-                      title={visibleKeys.has(key.id) ? "Hide key" : "Show key"}
-                    >
-                      <span className="material-symbols-outlined text-[14px]">
-                        {visibleKeys.has(key.id) ? "visibility_off" : "visibility"}
-                      </span>
-                    </button>
-                    <button
-                      onClick={() => copy(key.key, key.id)}
-                      className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
-                    >
-                      <span className="material-symbols-outlined text-[14px]">
-                        {copied === key.id ? "check" : "content_copy"}
-                      </span>
-                    </button>
+              <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(220px,0.55fr)_minmax(0,1.45fr)]">
+                <div className="flex items-center gap-3 rounded-xl border border-border bg-bg p-3 ps-4">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-[10px] border border-primary/20 bg-primary/10 text-primary">
+                    <span className="material-symbols-outlined endpoint-panel-icon">hub</span>
                   </div>
-                  <p className="text-xs text-text-muted mt-1">
-                    Created {new Date(key.createdAt).toLocaleDateString()}
-                  </p>
-                  {key.isActive === false && (
-                    <p className="text-xs text-orange-500 mt-1">Paused</p>
-                  )}
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-text-main">Universal API</p>
+                    <p className="truncate text-xs text-text-muted">Works with OpenAI clients</p>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Toggle
-                    size="sm"
-                    checked={key.isActive ?? true}
-                    onChange={(checked) => {
-                      if (key.isActive && !checked) {
-                        setConfirmState({
-                          title: "Pause API Key",
-                          message: `Pause API key "${key.name}"?\n\nThis key will stop working immediately but can be resumed later.`,
-                          onConfirm: async () => {
-                            setConfirmState(null);
-                            handleToggleKey(key.id, checked);
-                          }
-                        });
-                      } else {
-                        handleToggleKey(key.id, checked);
-                      }
-                    }}
-                    title={key.isActive ? "Pause key" : "Resume key"}
-                  />
+
+                <div className="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-bg p-2 ps-4">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-surface-2 text-text-muted">
+                    <span className="material-symbols-outlined endpoint-panel-icon">terminal</span>
+                  </div>
+                  <div className="min-w-0 flex-1 px-1">
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted">Endpoint URL</p>
+                    <code className="block truncate font-mono text-sm text-text-main" title={currentEndpoint}>
+                      {currentEndpoint}
+                    </code>
+                  </div>
                   <button
-                    onClick={() => handleDeleteKey(key.id)}
-                    className="p-2 hover:bg-red-500/10 rounded text-red-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                    type="button"
+                    onClick={() => copy(currentEndpoint, "local_url")}
+                    className={`flex size-10 shrink-0 items-center justify-center rounded-[10px] border transition-colors ${copied === "local_url" ? "border-success/30 bg-success/10 text-success" : "border-border bg-surface-2 text-text-muted hover:border-primary/30 hover:text-primary"}`}
+                    title="Copy endpoint"
+                    aria-label="Copy endpoint"
                   >
-                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                    <span className="material-symbols-outlined text-[18px]">
+                      {copied === "local_url" ? "check" : "content_copy"}
+                    </span>
                   </button>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </Card>
+            </div>
+          </Card>
+
+          {/* API Keys */}
+          <Card id="require-api-key" padding="none" className="overflow-hidden">
+            <div className="p-6">
+              <div className="flex items-center justify-between gap-4">
+                <SettingsCardHeader
+                  icon="vpn_key"
+                  title="API Keys"
+                  subtitle="Create, pause, and rotate gateway credentials"
+                />
+                <Toggle
+                  checked={requireApiKey}
+                  onChange={() => handleRequireApiKey(!requireApiKey)}
+                />
+              </div>
+
+              <Button
+                icon="add"
+                size="md"
+                fullWidth
+                className="mt-5"
+                onClick={() => setShowAddModal(true)}
+              >
+                Create API key
+              </Button>
+
+              {isRemoteHost && !requireApiKey && (
+                <div className="mt-3">
+                  <SecurityWarning message="Endpoint is exposed without an API key." />
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-border-subtle bg-bg/30 p-3 sm:p-4">
+              {keys.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-border bg-surface p-8 text-center">
+                  <div className="mx-auto flex size-10 items-center justify-center rounded-xl border border-border bg-bg text-text-muted">
+                    <span className="material-symbols-outlined text-[20px]">key_off</span>
+                  </div>
+                  <p className="mt-3 text-sm font-medium text-text-main">No API keys yet</p>
+                  <p className="mt-1 text-xs text-text-muted">Create your first key to secure external requests.</p>
+                </div>
+              ) : (
+                <div className="grid gap-2">
+                  {keys.map((apiKey) => {
+                    const isActive = apiKey.isActive !== false;
+
+                    return (
+                      <div
+                        key={apiKey.id}
+                        className={`group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-xl border p-2 transition-colors sm:grid-cols-[auto_minmax(180px,0.8fr)_minmax(260px,1.4fr)_auto] ${isActive ? "border-border bg-surface hover:border-primary/25" : "border-border-subtle bg-bg opacity-70"}`}
+                      >
+                        <div className="col-start-1 row-start-1 flex size-10 items-center justify-center rounded-[10px] border border-border bg-bg">
+                          <input
+                            type="checkbox"
+                            checked={isActive}
+                            onChange={(event) => {
+                              const checked = event.target.checked;
+                              if (isActive && !checked) {
+                                setConfirmState({
+                                  title: "Pause API Key",
+                                  message: `Pause API key "${apiKey.name}"?\n\nThis key will stop working immediately but can be resumed later.`,
+                                  onConfirm: async () => {
+                                    setConfirmState(null);
+                                    handleToggleKey(apiKey.id, checked);
+                                  }
+                                });
+                              } else {
+                                handleToggleKey(apiKey.id, checked);
+                              }
+                            }}
+                            className="size-4 cursor-pointer accent-primary"
+                            title={isActive ? "Pause key" : "Resume key"}
+                            aria-label={isActive ? `Pause ${apiKey.name}` : `Resume ${apiKey.name}`}
+                          />
+                        </div>
+
+                        <div className="col-start-2 row-start-1 flex h-10 min-w-0 items-center justify-center rounded-[10px] border border-border bg-bg px-3 text-center">
+                          <p className="truncate text-sm font-medium text-text-main">{apiKey.name}</p>
+                        </div>
+
+                        <div className="col-span-2 col-start-2 row-start-2 flex h-10 min-w-0 items-center overflow-hidden rounded-[10px] border border-border bg-bg sm:col-span-1 sm:col-start-3 sm:row-start-1">
+                          <code className="min-w-0 flex-1 truncate px-3 font-mono text-xs text-text-muted">
+                            {maskKey(apiKey.key)}
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => copy(apiKey.key, apiKey.id)}
+                            className={`flex h-full w-10 shrink-0 items-center justify-center border-l border-border transition-colors ${copied === apiKey.id ? "bg-success/10 text-success" : "text-text-muted hover:bg-primary/10 hover:text-primary"}`}
+                            title="Copy key"
+                            aria-label={`Copy ${apiKey.name}`}
+                          >
+                            <span className="material-symbols-outlined endpoint-key-icon">
+                              {copied === apiKey.id ? "check" : "content_copy"}
+                            </span>
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteKey(apiKey.id)}
+                          className="col-start-3 row-start-1 flex size-10 items-center justify-center rounded-[10px] border border-danger/30 bg-danger/10 text-danger transition-colors hover:border-danger/50 hover:bg-danger/15 sm:col-start-4"
+                          title="Delete key"
+                          aria-label={`Delete ${apiKey.name}`}
+                        >
+                          <span className="material-symbols-outlined endpoint-key-icon">delete</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
 
       {/* Add Key Modal */}
       <Modal
@@ -905,13 +919,17 @@ export default function APIPageClient({ machineId }) {
               readOnly
               className="flex-1 font-mono text-sm"
             />
-            <Button
-              variant="secondary"
-              icon={copied === "created_key" ? "check" : "content_copy"}
+            <button
+              type="button"
               onClick={() => copy(createdKey, "created_key")}
+              className="flex w-11 shrink-0 items-center justify-center rounded-[10px] border border-border bg-surface-2 text-text-main transition-colors hover:bg-surface-3"
+              title={copied === "created_key" ? "Copied!" : "Copy"}
+              aria-label={copied === "created_key" ? "Copied!" : "Copy"}
             >
-              {copied === "created_key" ? "Copied!" : "Copy"}
-            </Button>
+              <span className="material-symbols-outlined text-[18px]">
+                {copied === "created_key" ? "check" : "content_copy"}
+              </span>
+            </button>
           </div>
           <Button onClick={() => setCreatedKey(null)} fullWidth>
             Done
@@ -1074,6 +1092,7 @@ export default function APIPageClient({ machineId }) {
         message={confirmState?.message}
         variant="danger"
       />
+      </div>
     </div>
   );
 }

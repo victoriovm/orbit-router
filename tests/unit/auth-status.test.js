@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   })),
   cookies: vi.fn(),
   getSettings: vi.fn(),
+  getPasskeyCount: vi.fn(),
   isOidcConfigured: vi.fn(),
   getDashboardAuthSession: vi.fn(),
 }));
@@ -21,6 +22,7 @@ vi.mock("next/headers", () => ({
 
 vi.mock("@/lib/localDb", () => ({
   getSettings: mocks.getSettings,
+  getPasskeyCount: mocks.getPasskeyCount,
 }));
 
 vi.mock("@/lib/auth/oidc", () => ({
@@ -37,6 +39,7 @@ describe("GET /api/auth/status", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getSettings.mockResolvedValue({ requireLogin: true, authMode: "password" });
+    mocks.getPasskeyCount.mockResolvedValue(0);
     mocks.cookies.mockResolvedValue({ get: vi.fn(() => ({ value: "session-token" })) });
     mocks.isOidcConfigured.mockReturnValue(false);
   });
@@ -56,6 +59,17 @@ describe("GET /api/auth/status", () => {
     const response = await GET();
 
     expect(response.body.authenticated).toBe(false);
+  });
+
+  it("reports registered passkeys and passkey sessions", async () => {
+    mocks.getPasskeyCount.mockResolvedValue(2);
+    mocks.getDashboardAuthSession.mockResolvedValue({ authenticated: true, passkey: true });
+
+    const response = await GET();
+
+    expect(response.body.hasPasskeys).toBe(true);
+    expect(response.body.loginMethod).toBe("Passkey");
+    expect(response.body.displayName).toBe("Local User");
   });
 
   it("fails closed when status dependencies throw", async () => {

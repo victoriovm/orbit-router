@@ -15,7 +15,7 @@ import Card from "./Card";
 import OverviewCards from "@/app/(dashboard)/dashboard/usage/components/OverviewCards";
 import UsageTable, { fmt, fmtTime } from "@/app/(dashboard)/dashboard/usage/components/UsageTable";
 import dynamic from "next/dynamic";
-// Lazy-load: keeps @xyflow/react out of the shared bundle until topology renders
+// Lazy-load the routing overview with the rest of the analytics content.
 const ProviderTopology = dynamic(() => import("@/app/(dashboard)/dashboard/usage/components/ProviderTopology"), { ssr: false });
 import UsageChart from "@/app/(dashboard)/dashboard/usage/components/UsageChart";
 
@@ -39,47 +39,65 @@ function TimeAgo({ timestamp }) {
   return <>{timeAgo(timestamp)}</>;
 }
 
+function formatCompactTokens(value) {
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value || 0);
+}
+
 function RecentRequests({ requests = [] }) {
+  const visibleRequests = requests.slice(0, 7);
+
   return (
-    <Card className="flex min-w-0 flex-col overflow-hidden" padding="sm" style={{ height: 480 }}>
-      {/* Header */}
-      <div className="px-1 py-2 border-b border-border shrink-0">
-        <span className="text-xs font-semibold text-text-muted uppercase tracking-wide">Recent Requests</span>
+    <Card className="flex min-w-0 flex-col overflow-hidden" padding="none" style={{ height: 480 }}>
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2.5">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-info/20 bg-info/10 text-info">
+            <span className="material-symbols-outlined usage-panel-header-icon">history</span>
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-text-main">Recent Requests</p>
+            <p className="truncate text-[11px] text-text-muted">Latest completed calls</p>
+          </div>
+        </div>
+        <span className="rounded-full border border-border bg-bg px-2 py-0.5 text-[10px] text-text-muted">
+          {visibleRequests.length} Recent
+        </span>
       </div>
 
       {!requests.length ? (
-        <div className="flex-1 flex items-center justify-center text-text-muted text-sm">No requests yet.</div>
+        <div className="flex flex-1 items-center justify-center text-sm text-text-muted">No requests yet.</div>
       ) : (
-        <div className="flex-1 overflow-y-auto">
-          <table className="w-full min-w-[300px] border-collapse text-xs">
-            <thead className="sticky top-0 bg-bg z-10">
-              <tr className="border-b border-border">
-                <th className="py-1.5 text-left font-semibold text-text-muted w-2"></th>
-                <th className="py-1.5 text-left font-semibold text-text-muted">Model</th>
-                <th className="py-1.5 text-right font-semibold text-text-muted whitespace-nowrap">In / Out</th>
-                <th className="py-1.5 text-right font-semibold text-text-muted">When</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/50">
-              {requests.map((r, i) => {
-                const ok = !r.status || r.status === "ok" || r.status === "success";
-                return (
-                  <tr key={i} className="hover:bg-bg-subtle transition-colors">
-                    <td className="py-1.5">
-                      <span className={`block w-1.5 h-1.5 rounded-full ${ok ? "bg-success" : "bg-error"}`} />
-                    </td>
-                    <td className="py-1.5 font-mono truncate max-w-[120px]" title={r.model}>{r.model}</td>
-                    <td className="py-1.5 text-right whitespace-nowrap">
-                      <span className="text-primary">{fmt(r.promptTokens)}↑</span>
-                      {" "}
-                      <span className="text-success">{fmt(r.completionTokens)}↓</span>
-                    </td>
-                    <td className="py-1.5 text-right text-text-muted whitespace-nowrap"><TimeAgo timestamp={r.timestamp} /></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="grid flex-1 content-start gap-1.5 overflow-hidden px-4 py-2">
+          {visibleRequests.map((request, index) => {
+            const ok = !request.status || request.status === "ok" || request.status === "success";
+
+            return (
+              <div
+                key={`${request.timestamp}-${request.provider}-${request.model}-${index}`}
+                className="flex min-w-0 items-center gap-3 rounded-[10px] border border-border bg-bg px-3 py-2 transition-colors hover:border-primary/20 hover:bg-bg-subtle"
+              >
+                <div className={`flex size-8 shrink-0 items-center justify-center rounded-lg border ${ok ? "border-info/20 bg-info/10 text-info" : "border-danger/20 bg-danger/10 text-danger"}`}>
+                  <span className="material-symbols-outlined recent-request-item-icon">{ok ? "smart_toy" : "error"}</span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className={`truncate text-[11px] font-medium leading-tight ${ok ? "text-text-main" : "text-danger"}`} title={request.model}>
+                    {request.model}
+                  </p>
+                  <p className="truncate text-[9px] leading-tight text-text-muted">{request.provider || "Unknown provider"}</p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="text-[10px] font-medium whitespace-nowrap">
+                    <span className="text-warning">{formatCompactTokens(request.promptTokens)} in</span>
+                    <span className="mx-1 text-border">/</span>
+                    <span className="text-success">{formatCompactTokens(request.completionTokens)} out</span>
+                  </p>
+                  <p className="text-[9px] leading-tight text-text-muted whitespace-nowrap"><TimeAgo timestamp={request.timestamp} /></p>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </Card>
@@ -473,6 +491,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
           <ProviderTopology
             providers={providers}
             activeRequests={stats.activeRequests || []}
+            pending={stats.pending || {}}
             lastProvider={stats.recentRequests?.[0]?.provider || ""}
             errorProvider={stats.errorProvider || ""}
           />

@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { Button, Card } from "@/shared/components";
+import { Button, Card, ConfirmModal } from "@/shared/components";
+import SettingsCardHeader from "./SettingsCardHeader";
 
 const PHASE_LABELS = {
   starting: "Starting update...",
@@ -11,6 +12,45 @@ const PHASE_LABELS = {
   done: "Update completed successfully.",
   error: "Update failed.",
 };
+
+const STATUS_STYLES = {
+  danger: {
+    wrapper: "border-danger/20 bg-danger/10",
+    icon: "border-danger/20 bg-danger/10 text-danger",
+    title: "text-danger",
+  },
+  info: {
+    wrapper: "border-info/20 bg-info/10",
+    icon: "border-info/20 bg-info/10 text-info",
+    title: "text-info",
+  },
+  success: {
+    wrapper: "border-success/20 bg-success/10",
+    icon: "border-success/20 bg-success/10 text-success",
+    title: "text-success",
+  },
+  warning: {
+    wrapper: "border-warning/20 bg-warning/10",
+    icon: "border-warning/20 bg-warning/10 text-warning",
+    title: "text-warning",
+  },
+};
+
+function UpdateStatusNotice({ icon, title, description, tone, spin = false }) {
+  const style = STATUS_STYLES[tone];
+
+  return (
+    <div className={`flex items-center gap-3 rounded-lg border p-3 ${style.wrapper}`}>
+      <div className={`flex size-10 shrink-0 items-center justify-center rounded-lg border ${style.icon}`}>
+        <span className={`material-symbols-outlined text-[22px] leading-none ${spin ? "animate-spin" : ""}`}>{icon}</span>
+      </div>
+      <div className="min-w-0">
+        <p className={`text-sm font-semibold ${style.title}`}>{title}</p>
+        {description ? <p className="text-xs text-text-muted">{description}</p> : null}
+      </div>
+    </div>
+  );
+}
 
 function shortCommit(value) {
   return value ? value.slice(0, 8) : "—";
@@ -27,6 +67,7 @@ export default function GitUpdateCard() {
   const [checking, setChecking] = useState(false);
   const [starting, setStarting] = useState(false);
   const [feedback, setFeedback] = useState({ type: "", message: "" });
+  const [showConfirm, setShowConfirm] = useState(false);
   const startedHereRef = useRef(false);
   const reloadScheduledRef = useRef(false);
 
@@ -56,7 +97,7 @@ export default function GitUpdateCard() {
               : data.blockedReason,
           });
         } else {
-          setFeedback({ type: "success", message: "9Router is already up to date." });
+          setFeedback({ type: "", message: "" });
         }
       }
       return data;
@@ -80,12 +121,12 @@ export default function GitUpdateCard() {
     return () => clearInterval(timer);
   }, [loadStatus, updateRunning]);
 
-  const handleUpdate = async () => {
-    const confirmed = globalThis.confirm(
-      "Update 9Router now? The dashboard may be unavailable briefly while the update is installed.",
-    );
-    if (!confirmed) return;
+  const handleUpdate = () => {
+    setShowConfirm(true);
+  };
 
+  const confirmUpdate = async () => {
+    setShowConfirm(false);
     setStarting(true);
     setFeedback({ type: "", message: "" });
     startedHereRef.current = true;
@@ -109,54 +150,87 @@ export default function GitUpdateCard() {
   const operation = status?.operation;
   const phaseMessage = operation?.message
     || (operation?.phase === "restarting" ? "Restarting application..." : PHASE_LABELS[operation?.phase]);
-  const feedbackClass = feedback.type === "error"
-    ? "text-red-500 border-red-500/20 bg-red-500/10"
+  const isUpToDate = status?.repositoryAvailable === true
+    && status?.updateAvailable === false
+    && !updateRunning;
+  const feedbackNotice = feedback.type === "error"
+    ? { icon: "error", title: "Update failed", tone: "danger" }
     : feedback.type === "warning"
-      ? "text-amber-600 dark:text-amber-400 border-amber-500/20 bg-amber-500/10"
-      : "text-green-600 dark:text-green-400 border-green-500/20 bg-green-500/10";
+      ? { icon: "warning", title: "Update attention", tone: "warning" }
+      : status?.updateAvailable
+        ? { icon: "system_update_alt", title: "Update available", tone: "info" }
+        : { icon: "check_circle", title: "Update completed", tone: "success" };
 
   return (
     <Card>
-      <div className="flex items-center gap-3 mb-4">
-        <div className="size-10 rounded-lg bg-purple-500/10 text-purple-500 flex items-center justify-center shrink-0">
-          <span className="material-symbols-outlined text-[20px]">system_update_alt</span>
-        </div>
-        <div>
-          <h3 className="text-base sm:text-lg font-semibold">Application Update</h3>
-          <p className="text-xs sm:text-sm text-text-muted">Check for new versions and keep 9Router up to date.</p>
-        </div>
-      </div>
+      <SettingsCardHeader
+        icon="system_update_alt"
+        title="Application Update"
+        subtitle="Check for new versions and keep Orbit Router up to date."
+        tone="purple"
+        className="mb-4"
+      />
 
       <div className="flex flex-col gap-3">
         {status?.repositoryAvailable && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <div className="rounded-lg border border-border bg-bg p-3">
-              <p className="text-xs text-text-muted">Current branch</p>
-              <p className="text-sm font-medium mt-1">{status.branch}</p>
-              <code className="text-xs text-text-muted">{shortCommit(status.currentCommit)}</code>
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-2">
+                  <span className="material-symbols-outlined text-[20px] leading-none text-text-muted">sync_saved_locally</span>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-text-muted">Current branch</p>
+                  <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5">
+                    <p className="truncate text-sm font-medium">{status.branch}</p>
+                    <code className="shrink-0 text-xs text-text-muted">({shortCommit(status.currentCommit)})</code>
+                  </div>
+                </div>
+              </div>
             </div>
             <div className="rounded-lg border border-border bg-bg p-3">
-              <p className="text-xs text-text-muted">Remote branch</p>
-              <p className="text-sm font-medium mt-1">{status.upstream}</p>
-              <code className="text-xs text-text-muted">{shortCommit(status.remoteCommit)}</code>
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-2">
+                  <span className="material-symbols-outlined text-[20px] leading-none text-text-muted">cloud</span>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-text-muted">Remote branch</p>
+                  <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5">
+                    <p className="truncate text-sm font-medium">{status.upstream}</p>
+                    <code className="shrink-0 text-xs text-text-muted">({shortCommit(status.remoteCommit)})</code>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
+        )}
+
+        {isUpToDate && (
+          <UpdateStatusNotice
+            icon="check_circle"
+            title="Orbit Router is up to date"
+            description="You are running the latest available version."
+            tone="success"
+          />
         )}
 
         {updateRunning && (
-          <div className="flex items-center gap-3 rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-blue-600 dark:text-blue-400">
-            <span className="material-symbols-outlined animate-spin text-[20px]">progress_activity</span>
-            <div>
-              <p className="text-sm font-medium">{phaseMessage || "Update in progress..."}</p>
-              <p className="text-xs opacity-80">The dashboard may disconnect briefly during the PM2 restart.</p>
-            </div>
-          </div>
+          <UpdateStatusNotice
+            icon="progress_activity"
+            title={phaseMessage || "Update in progress..."}
+            description="The dashboard may disconnect briefly during the PM2 restart."
+            tone="info"
+            spin
+          />
         )}
 
-        {feedback.message && !updateRunning && (
-          <div className={`rounded-lg border p-3 text-sm ${feedbackClass}`}>
-            {feedback.message}
-          </div>
+        {feedback.message && !updateRunning && !isUpToDate && (
+          <UpdateStatusNotice
+            icon={feedbackNotice.icon}
+            title={feedbackNotice.title}
+            description={feedback.message}
+            tone={feedbackNotice.tone}
+          />
         )}
 
         <div className="flex flex-col gap-2 pt-1">
@@ -185,6 +259,16 @@ export default function GitUpdateCard() {
         </div>
 
       </div>
+      <ConfirmModal
+        isOpen={showConfirm}
+        onClose={() => setShowConfirm(false)}
+        onConfirm={confirmUpdate}
+        title="Update 9Router"
+        message="Update 9Router now? The dashboard may be unavailable briefly while the update is installed."
+        confirmText="Update now"
+        cancelText="Cancel"
+        variant="primary"
+      />
     </Card>
   );
 }

@@ -14,8 +14,8 @@ export async function GET() {
         try {
           // Push lightweight update immediately so UI reflects changes fast
           if (state.cachedStats) {
-            const { activeRequests, recentRequests, errorProvider } = await getActiveRequests();
-            const quickStats = { ...state.cachedStats, activeRequests, recentRequests, errorProvider };
+            const { activeRequests, recentRequests, errorProvider, pending } = await getActiveRequests();
+            const quickStats = { ...state.cachedStats, activeRequests, recentRequests, errorProvider, pending };
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(quickStats)}\n\n`));
           }
           // Then do full recalc and update cache
@@ -31,11 +31,10 @@ export async function GET() {
       };
 
       // Lightweight push: only refresh activeRequests + recentRequests on pending changes
-      state.sendPending = async () => {
+      state.sendPending = (pending) => {
         if (state.closed || !state.cachedStats) return;
         try {
-          const { activeRequests, recentRequests, errorProvider } = await getActiveRequests();
-          const stats = { ...state.cachedStats, activeRequests, recentRequests, errorProvider };
+          const stats = { ...state.cachedStats, activeRequests: [], pending };
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(stats)}\n\n`));
         } catch {
           state.closed = true;

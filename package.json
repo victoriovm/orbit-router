@@ -1,7 +1,7 @@
 {
   "name": "9router-app",
   "version": "0.5.69",
-  "description": "9Router web dashboard",
+  "description": "Orbit Router web dashboard",
   "private": true,
   "scripts": {
     "dev": "next dev --port 20127",
@@ -24,6 +24,8 @@
     "@monaco-editor/react": "^4.7.0",
     "@next/third-parties": "^16.2.9",
     "@node-saml/node-saml": "^5.1.0",
+    "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/server": "^13.3.3",
     "@xyflow/react": "^12.10.1",
     "bcryptjs": "^3.0.3",
     "chalk": "^5.6.2",

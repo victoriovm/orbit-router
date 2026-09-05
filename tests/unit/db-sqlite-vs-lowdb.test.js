@@ -214,11 +214,18 @@ describe("DB SQLite layer — public API parity", () => {
     expect(stats.byProvider.openai.promptTokens).toBeGreaterThanOrEqual(300);
   });
 
-  it("usage: pending tracking in-memory", () => {
+  it("usage: pending tracking in-memory", async () => {
     sqliteDb.trackPendingRequest("gpt-4", "openai", "c1", true);
     expect(global._pendingRequests.byModel["gpt-4 (openai)"]).toBe(1);
     sqliteDb.trackPendingRequest("gpt-4", "openai", "c1", false);
     expect(global._pendingRequests.byModel["gpt-4 (openai)"]).toBeUndefined();
+
+    sqliteDb.trackPendingRequest("muse", "oc", null, true);
+    const { activeRequests } = await sqliteDb.getActiveRequests();
+    expect(activeRequests).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: "oc", account: "Direct", count: 1 }),
+    ]));
+    sqliteDb.trackPendingRequest("muse", "oc", null, false);
   });
 
   it("requestDetails: save → query with paging", async () => {

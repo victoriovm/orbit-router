@@ -45,6 +45,22 @@ function scheduleStatsEvent(event, delayMs = 150) {
   statsEmitTimers[key]?.unref?.();
 }
 
+function getPendingSnapshot() {
+  return {
+    byModel: { ...pendingRequests.byModel },
+    byAccount: Object.fromEntries(
+      Object.entries(pendingRequests.byAccount).map(([connectionId, models]) => [
+        connectionId,
+        { ...models },
+      ])
+    ),
+  };
+}
+
+function emitPendingEvent() {
+  statsEmitter.emit("pending", getPendingSnapshot());
+}
+
 function getLocalDateKey(timestamp) {
   const d = timestamp ? new Date(timestamp) : new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -117,6 +133,40 @@ async function getConnectionMapCached() {
   return connCache.map;
 }
 
+function buildActiveRequests(connectionMap) {
+  const activeRequests = [];
+  const accountedByModel = {};
+
+  for (const [connectionId, models] of Object.entries(pendingRequests.byAccount)) {
+    for (const [modelKey, count] of Object.entries(models)) {
+      if (count <= 0) continue;
+      const accountName = connectionMap[connectionId] || `Account ${connectionId.slice(0, 8)}...`;
+      const match = modelKey.match(/^(.*) \((.*)\)$/);
+      accountedByModel[modelKey] = (accountedByModel[modelKey] || 0) + count;
+      activeRequests.push({
+        model: match ? match[1] : modelKey,
+        provider: match ? match[2] : "unknown",
+        account: accountName,
+        count,
+      });
+    }
+  }
+
+  for (const [modelKey, count] of Object.entries(pendingRequests.byModel)) {
+    const directCount = Math.max(0, count - (accountedByModel[modelKey] || 0));
+    if (directCount <= 0) continue;
+    const match = modelKey.match(/^(.*) \((.*)\)$/);
+    activeRequests.push({
+      model: match ? match[1] : modelKey,
+      provider: match ? match[2] : "unknown",
+      account: "Direct",
+      count: directCount,
+    });
+  }
+
+  return activeRequests;
+}
+
 async function ensureRingInitialized() {
   if (recentRing.initialized) return;
   recentRing.initialized = true;
@@ -177,7 +227,7 @@ export function trackPendingRequest(model, provider, connectionId, started, erro
       if (connectionId && pendingRequests.byAccount[connectionId]?.[modelKey] > 0) {
         pendingRequests.byAccount[connectionId][modelKey] = 0;
       }
-      scheduleStatsEvent("pending");
+      emitPendingEvent();
     }, PENDING_TIMEOUT_MS);
   } else {
     clearTimeout(pendingTimers[timerKey]);
@@ -190,26 +240,12 @@ export function trackPendingRequest(model, provider, connectionId, started, erro
   }
 
   // [PENDING] console line removed; lifecycle is visible via "▶" and "📊 done" lines
-  scheduleStatsEvent("pending");
+  emitPendingEvent();
 }
 
 export async function getActiveRequests() {
-  const activeRequests = [];
   const connectionMap = await getConnectionMapCached();
-
-  for (const [connectionId, models] of Object.entries(pendingRequests.byAccount)) {
-    for (const [modelKey, count] of Object.entries(models)) {
-      if (count > 0) {
-        const accountName = connectionMap[connectionId] || `Account ${connectionId.slice(0, 8)}...`;
-        const match = modelKey.match(/^(.*) \((.*)\)$/);
-        activeRequests.push({
-          model: match ? match[1] : modelKey,
-          provider: match ? match[2] : "unknown",
-          account: accountName, count,
-        });
-      }
-    }
-  }
+  const activeRequests = buildActiveRequests(connectionMap);
 
   await ensureRingInitialized();
   const seen = new Set();
@@ -235,7 +271,7 @@ export async function getActiveRequests() {
     .slice(0, 20);
 
   const errorProvider = (Date.now() - lastErrorProvider.ts < 10000) ? lastErrorProvider.provider : "";
-  return { activeRequests, recentRequests, errorProvider };
+  return { activeRequests, recentRequests, errorProvider, pending: getPendingSnapshot() };
 }
 
 export async function saveRequestUsage(entry) {
@@ -397,26 +433,13 @@ export async function getUsageStats(period = "all") {
     totalPromptTokens: 0, totalCompletionTokens: 0, totalCachedTokens: 0, totalCost: 0,
     byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {},
     last10Minutes: [],
-    pending: pendingRequests,
+    pending: getPendingSnapshot(),
     activeRequests: [],
     recentRequests,
     errorProvider: (Date.now() - lastErrorProvider.ts < 10000) ? lastErrorProvider.provider : "",
   };
 
-  // Active requests
-  for (const [connectionId, models] of Object.entries(pendingRequests.byAccount)) {
-    for (const [modelKey, count] of Object.entries(models)) {
-      if (count > 0) {
-        const accountName = connectionMap[connectionId] || `Account ${connectionId.slice(0, 8)}...`;
-        const match = modelKey.match(/^(.*) \((.*)\)$/);
-        stats.activeRequests.push({
-          model: match ? match[1] : modelKey,
-          provider: match ? match[2] : "unknown",
-          account: accountName, count,
-        });
-      }
-    }
-  }
+  stats.activeRequests = buildActiveRequests(connectionMap);
 
   // last10Minutes — query 10min window
   const now = new Date();

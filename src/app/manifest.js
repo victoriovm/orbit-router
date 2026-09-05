@@ -1,12 +1,12 @@
 export default function manifest() {
   return {
-    name: '9Router - AI Infrastructure Management',
-    short_name: '9Router',
+    name: 'Orbit Router - AI Infrastructure Management',
+    short_name: 'Orbit Router',
     description: 'One endpoint for all your AI providers. Manage keys, monitor usage, and scale effortlessly.',
     start_url: '/',
     display: 'standalone',
     background_color: '#0a0a0a',
-    theme_color: '#0a0a0a',
+    theme_color: '#6D28D9',
     orientation: 'portrait-primary',
     icons: [
       {
