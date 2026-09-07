@@ -85,7 +85,14 @@ function RecentRequests({ requests = [] }) {
                   <p className={`truncate text-[11px] font-medium leading-tight ${ok ? "text-text-main" : "text-danger"}`} title={request.model}>
                     {request.model}
                   </p>
-                  <p className="truncate text-[9px] leading-tight text-text-muted">{request.provider || "Unknown provider"}</p>
+                  <p className="truncate text-[9px] leading-tight text-text-muted">
+                    {request.provider || "Unknown provider"}
+                    {request.tokensPerSecond != null && (
+                      <span className="ml-1.5 font-medium text-info whitespace-nowrap">
+                        · {request.tokensPerSecond} tok/s
+                      </span>
+                    )}
+                  </p>
                 </div>
                 <div className="shrink-0 text-right">
                   <p className="text-[10px] font-medium whitespace-nowrap">

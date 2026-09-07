@@ -172,11 +172,12 @@ async function ensureRingInitialized() {
   recentRing.initialized = true;
   try {
     const db = await getAdapter();
-    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
+    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens, meta FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
     recentRing.items = rows.reverse().map((r) => ({
       timestamp: r.timestamp, provider: r.provider, model: r.model, connectionId: r.connectionId,
       apiKey: r.apiKey, endpoint: r.endpoint, cost: r.cost, status: r.status,
       tokens: parseJson(r.tokens, {}),
+      latencyMs: parseJson(r.meta, {}).latencyMs,
     }));
   } catch {}
 }
@@ -257,6 +258,9 @@ export async function getActiveRequests() {
         timestamp: e.timestamp, model: e.model, provider: e.provider || "",
         promptTokens: t.prompt_tokens || t.input_tokens || 0,
         completionTokens: t.completion_tokens || t.output_tokens || 0,
+        tokensPerSecond: typeof e.latencyMs === "number" && e.latencyMs > 0 && (t.completion_tokens || t.output_tokens || 0) > 0
+          ? Math.round(((t.completion_tokens || t.output_tokens || 0) * 1000) / e.latencyMs * 10) / 10
+          : undefined,
         status: e.status || "ok",
       };
     })
@@ -320,7 +324,7 @@ export async function saveRequestUsage(entry) {
           entry.timestamp, entry.provider || null, entry.model || null,
           entry.connectionId || null, entry.apiKey || null, entry.endpoint || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
-          stringifyJson(tokens), stringifyJson({}),
+          stringifyJson(tokens), stringifyJson(typeof entry.latencyMs === "number" && entry.latencyMs > 0 ? { latencyMs: entry.latencyMs } : {}),
         ]
       );
 
@@ -405,16 +409,21 @@ export async function getUsageStats(period = "all") {
   for (const k of allApiKeys) apiKeyMap[k.key] = { name: k.name, id: k.id, createdAt: k.createdAt };
 
   // recentRequests from live history (last 100 entries enough for 20 deduped)
-  const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status FROM usageHistory ORDER BY id DESC LIMIT 100`);
+  const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status, meta FROM usageHistory ORDER BY id DESC LIMIT 100`);
   const seen = new Set();
   const recentRequests = recentRows
     .map((r) => {
       const t = parseJson(r.tokens, {}) || {};
+      const completionTokens = t.completion_tokens || t.output_tokens || 0;
+      const latencyMs = parseJson(r.meta, {})?.latencyMs;
       return {
         timestamp: r.timestamp, model: r.model, provider: r.provider || "",
         promptTokens: t.prompt_tokens || t.input_tokens || 0,
-        completionTokens: t.completion_tokens || t.output_tokens || 0,
+        completionTokens,
         cachedTokens: t.cached_tokens || t.cache_read_input_tokens || 0,
+        tokensPerSecond: typeof latencyMs === "number" && latencyMs > 0 && completionTokens > 0
+          ? Math.round((completionTokens * 1000) / latencyMs * 10) / 10
+          : undefined,
         status: r.status || "ok",
       };
     })
