@@ -76,6 +76,13 @@ try {
     message: "Downloading repository updates...",
     timeoutMs: 2 * 60 * 1000,
   });
+  const installedCommit = await run("git", ["rev-parse", "HEAD"], {
+    phase: "pulling",
+    message: "Verifying downloaded repository updates...",
+    timeoutMs: 2 * 60 * 1000,
+    captureStdout: true,
+  });
+  writeState({ targetCommit: installedCommit.trim() });
   await run("npm", ["run", "build"], {
     phase: "building",
     message: "Building the updated application...",

@@ -227,6 +227,7 @@ export function startGitUpdate({
   statePath = GIT_UPDATE_STATE_PATH,
   logPath = GIT_UPDATE_LOG_PATH,
   processName = getPm2ProcessName(),
+  targetCommit = null,
 } = {}) {
   const currentState = readGitUpdateState(statePath);
   if (isGitUpdateRunning(currentState)) throw new Error("An update is already in progress");
@@ -244,6 +245,7 @@ export function startGitUpdate({
     startedAt,
     updatedAt: startedAt,
     finishedAt: null,
+    targetCommit: targetCommit || null,
   };
   writeGitUpdateState(operation, statePath);
 

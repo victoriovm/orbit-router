@@ -46,6 +46,7 @@ export async function POST() {
     const operation = startGitUpdate({
       repoRoot: status.repoRoot,
       processName: status.pm2Process,
+      targetCommit: status.remoteCommit,
     });
     return NextResponse.json(
       { success: true, message: "Git update started", operation },
