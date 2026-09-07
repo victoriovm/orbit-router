@@ -100,7 +100,7 @@ export function formatDoneLine({ usage, latency }) {
   return `DONE ${latency?.total ?? 0}ms${ttftStr} · ${inStr} · OUT ${outTok}`;
 }
 
-export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, latencyMs, label = "USAGE", silent = false }) {
+export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, endpoint, latencyMs, generationMs, label = "USAGE", silent = false }) {
   if (!tokens || typeof tokens !== "object") return;
 
   const inTokens = tokens.input_tokens ?? tokens.prompt_tokens ?? 0;
@@ -129,6 +129,7 @@ export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, 
     connectionId: connectionId || undefined,
     apiKey: apiKey || undefined,
     endpoint: endpoint || null,
-    latencyMs: typeof latencyMs === "number" && latencyMs > 0 ? latencyMs : undefined
+    latencyMs: typeof latencyMs === "number" && latencyMs > 0 ? latencyMs : undefined,
+    generationMs: typeof generationMs === "number" && Number.isFinite(generationMs) && generationMs >= 0 ? generationMs : undefined
   }).catch(() => {});
 }

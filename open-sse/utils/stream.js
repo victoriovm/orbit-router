@@ -67,6 +67,7 @@ export function createSSEStream(options = {}) {
   let accumulatedContent = "";
   let accumulatedThinking = "";
   let ttftAt = null;
+  let generationStartAt = null;
   let sseLineCount = 0;
   let sseEmittedCount = 0;
   const eventTypeCounts = {};
@@ -77,6 +78,10 @@ export function createSSEStream(options = {}) {
   let openAIResponsesDoneSent = false;
   let streamDoneSent = false;  // track duplicate [DONE] across transform + flush
   let finalized = false;
+
+  const markGenerationStarted = () => {
+    if (!generationStartAt) generationStartAt = Date.now();
+  };
 
   // Usage/logging tail, callable from transform() as well as flush(): a client that
   // closes right after the terminal event cancels the reader, and flush() never runs.
@@ -102,7 +107,7 @@ export function createSSEStream(options = {}) {
       onStreamComplete({
         content: accumulatedContent,
         thinking: accumulatedThinking
-      }, finalUsage, ttftAt);
+      }, finalUsage, ttftAt, generationStartAt);
     }
   };
 
@@ -178,6 +183,12 @@ export function createSSEStream(options = {}) {
                 }
               }
 
+              const responsesType = parsed.type;
+              if ((responsesType === "response.output_text.delta" || responsesType === "response.reasoning_summary_text.delta")
+                && typeof parsed.delta === "string" && parsed.delta.length > 0) {
+                markGenerationStarted();
+              }
+
               if (!hasValuableContent(parsed, FORMATS.OPENAI)) {
                 continue;
               }
@@ -186,10 +197,12 @@ export function createSSEStream(options = {}) {
               const content = delta?.content;
               const reasoning = delta?.reasoning_content;
               if (content && typeof content === "string") {
+                markGenerationStarted();
                 totalContentLength += content.length;
                 accumulatedContent += content;
               }
               if (reasoning && typeof reasoning === "string") {
+                markGenerationStarted();
                 totalContentLength += reasoning.length;
                 accumulatedThinking += reasoning;
               }
@@ -279,24 +292,34 @@ export function createSSEStream(options = {}) {
           continue;
         }
 
+        const responsesType = currentOpenAIResponsesEvent || parsed.type;
+        if ((responsesType === "response.output_text.delta" || responsesType === "response.reasoning_summary_text.delta")
+          && typeof parsed.delta === "string" && parsed.delta.length > 0) {
+          markGenerationStarted();
+        }
+
         // Claude format - content
         if (parsed.delta?.text) {
+          markGenerationStarted();
           totalContentLength += parsed.delta.text.length;
           accumulatedContent += parsed.delta.text;
         }
         // Claude format - thinking
         if (parsed.delta?.thinking) {
+          markGenerationStarted();
           totalContentLength += parsed.delta.thinking.length;
           accumulatedThinking += parsed.delta.thinking;
         }
         
         // OpenAI format - content
         if (parsed.choices?.[0]?.delta?.content) {
+          markGenerationStarted();
           totalContentLength += parsed.choices[0].delta.content.length;
           accumulatedContent += parsed.choices[0].delta.content;
         }
         // OpenAI format - reasoning
         if (parsed.choices?.[0]?.delta?.reasoning_content) {
+          markGenerationStarted();
           totalContentLength += parsed.choices[0].delta.reasoning_content.length;
           accumulatedThinking += parsed.choices[0].delta.reasoning_content;
         }
@@ -305,6 +328,7 @@ export function createSSEStream(options = {}) {
         if (parsed.candidates?.[0]?.content?.parts) {
           for (const part of parsed.candidates[0].content.parts) {
             if (part.text && typeof part.text === "string") {
+              markGenerationStarted();
               totalContentLength += part.text.length;
               // Check if this is thinking content
               if (part.thought === true) {

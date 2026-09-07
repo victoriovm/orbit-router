@@ -14,6 +14,33 @@ const RING_CAP = 50;
 const CONN_CACHE_TTL_MS = 30 * 1000;
 const PERIOD_MS = { "24h": 86400000, "7d": 604800000, "30d": 2592000000, "60d": 5184000000 };
 
+export function calculateTokensPerSecond(outputTokens, generationMs, latencyMs) {
+  if (typeof outputTokens !== "number" || !Number.isFinite(outputTokens) || outputTokens <= 0) {
+    return undefined;
+  }
+
+  const elapsedMs = typeof generationMs === "number" && Number.isFinite(generationMs) && generationMs >= 0
+    ? generationMs
+    : latencyMs;
+  if (typeof elapsedMs !== "number" || !Number.isFinite(elapsedMs) || elapsedMs < 0) {
+    return undefined;
+  }
+
+  // Jan uses one second only when both updates happen in the same tick.
+  return outputTokens * 1000 / (elapsedMs === 0 ? 1000 : elapsedMs);
+}
+
+function serializeUsageMeta(latencyMs, generationMs) {
+  const meta = {};
+  if (typeof latencyMs === "number" && Number.isFinite(latencyMs) && latencyMs > 0) {
+    meta.latencyMs = latencyMs;
+  }
+  if (typeof generationMs === "number" && Number.isFinite(generationMs) && generationMs >= 0) {
+    meta.generationMs = generationMs;
+  }
+  return stringifyJson(meta);
+}
+
 // In-memory state shared across Next.js modules
 if (!global._pendingRequests) global._pendingRequests = { byModel: {}, byAccount: {} };
 if (!global._lastErrorProvider) global._lastErrorProvider = { provider: "", ts: 0 };
@@ -173,12 +200,15 @@ async function ensureRingInitialized() {
   try {
     const db = await getAdapter();
     const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens, meta FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
-    recentRing.items = rows.reverse().map((r) => ({
-      timestamp: r.timestamp, provider: r.provider, model: r.model, connectionId: r.connectionId,
-      apiKey: r.apiKey, endpoint: r.endpoint, cost: r.cost, status: r.status,
-      tokens: parseJson(r.tokens, {}),
-      latencyMs: parseJson(r.meta, {}).latencyMs,
-    }));
+    recentRing.items = rows.reverse().map((r) => {
+      const meta = parseJson(r.meta, {});
+      return {
+        timestamp: r.timestamp, provider: r.provider, model: r.model, connectionId: r.connectionId,
+        apiKey: r.apiKey, endpoint: r.endpoint, cost: r.cost, status: r.status,
+        tokens: parseJson(r.tokens, {}),
+        latencyMs: meta.latencyMs, generationMs: meta.generationMs,
+      };
+    });
   } catch {}
 }
 
@@ -258,9 +288,11 @@ export async function getActiveRequests() {
         timestamp: e.timestamp, model: e.model, provider: e.provider || "",
         promptTokens: t.prompt_tokens || t.input_tokens || 0,
         completionTokens: t.completion_tokens || t.output_tokens || 0,
-        tokensPerSecond: typeof e.latencyMs === "number" && e.latencyMs > 0 && (t.completion_tokens || t.output_tokens || 0) > 0
-          ? Math.round(((t.completion_tokens || t.output_tokens || 0) * 1000) / e.latencyMs * 10) / 10
-          : undefined,
+        tokensPerSecond: calculateTokensPerSecond(
+          t.completion_tokens || t.output_tokens || 0,
+          e.generationMs,
+          e.latencyMs
+        ),
         status: e.status || "ok",
       };
     })
@@ -324,7 +356,7 @@ export async function saveRequestUsage(entry) {
           entry.timestamp, entry.provider || null, entry.model || null,
           entry.connectionId || null, entry.apiKey || null, entry.endpoint || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
-          stringifyJson(tokens), stringifyJson(typeof entry.latencyMs === "number" && entry.latencyMs > 0 ? { latencyMs: entry.latencyMs } : {}),
+          stringifyJson(tokens), serializeUsageMeta(entry.latencyMs, entry.generationMs),
         ]
       );
 
@@ -415,15 +447,15 @@ export async function getUsageStats(period = "all") {
     .map((r) => {
       const t = parseJson(r.tokens, {}) || {};
       const completionTokens = t.completion_tokens || t.output_tokens || 0;
-      const latencyMs = parseJson(r.meta, {})?.latencyMs;
+      const meta = parseJson(r.meta, {}) || {};
+      const latencyMs = meta.latencyMs;
+      const generationMs = meta.generationMs;
       return {
         timestamp: r.timestamp, model: r.model, provider: r.provider || "",
         promptTokens: t.prompt_tokens || t.input_tokens || 0,
         completionTokens,
         cachedTokens: t.cached_tokens || t.cache_read_input_tokens || 0,
-        tokensPerSecond: typeof latencyMs === "number" && latencyMs > 0 && completionTokens > 0
-          ? Math.round((completionTokens * 1000) / latencyMs * 10) / 10
-          : undefined,
+        tokensPerSecond: calculateTokensPerSecond(completionTokens, generationMs, latencyMs),
         status: r.status || "ok",
       };
     })
