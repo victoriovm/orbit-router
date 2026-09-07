@@ -89,7 +89,7 @@ function RecentRequests({ requests = [] }) {
                     <span className="truncate" title={request.provider}>{request.provider || "Unknown provider"}</span>
                     {request.tokensPerSecond != null && (
                       <span className="shrink-0 whitespace-nowrap font-medium text-info">
-                        {request.tokensPerSecond} tok/s
+                        {Math.round(request.tokensPerSecond)} tok/s
                       </span>
                     )}
                   </div>
