@@ -75,11 +75,23 @@ export function reconcileRestartedOperation(
   statePath = GIT_UPDATE_STATE_PATH,
   now = Date.now(),
   processStartedAt = now - process.uptime() * 1000,
+  verification = {},
 ) {
   if (state?.status !== "running" || state.phase !== "restarting") return state;
 
   const restartRequestedAt = Date.parse(state.updatedAt || "");
-  if (!Number.isFinite(restartRequestedAt) || processStartedAt <= restartRequestedAt) return state;
+  const targetCommit = state.targetCommit || verification.targetCommit;
+  const commitVerified = Boolean(
+    targetCommit
+      && verification.currentCommit
+      && verification.currentCommit === targetCommit
+      && (!verification.remoteCommit || verification.remoteCommit === targetCommit),
+  );
+  if (
+    !Number.isFinite(restartRequestedAt)
+    || processStartedAt <= restartRequestedAt
+    || !commitVerified
+  ) return state;
 
   const finishedAt = new Date(now).toISOString();
   const completedState = {
@@ -95,10 +107,37 @@ export function reconcileRestartedOperation(
   return completedState;
 }
 
+function expireStaleOperation(state, statePath, now = Date.now()) {
+  if (state?.status !== "running" || isGitUpdateRunning(state, now)) return state;
+
+  const finishedAt = new Date(now).toISOString();
+  const expiredState = {
+    ...state,
+    status: "error",
+    phase: "error",
+    message: "The previous Git update expired before it completed.",
+    error: "The update worker did not report completion. Check the update log and try again.",
+    updatedAt: finishedAt,
+    finishedAt,
+  };
+  writeGitUpdateState(expiredState, statePath);
+  return expiredState;
+}
+
 function publicOperationState(state) {
   if (!state) return null;
-  const { operationId, status, phase, message, error, startedAt, updatedAt, finishedAt } = state;
-  return { operationId, status, phase, message, error, startedAt, updatedAt, finishedAt };
+  const {
+    operationId,
+    status,
+    phase,
+    message,
+    error,
+    startedAt,
+    updatedAt,
+    finishedAt,
+    targetCommit,
+  } = state;
+  return { operationId, status, phase, message, error, startedAt, updatedAt, finishedAt, targetCommit };
 }
 
 export async function getGitUpdateStatus({
@@ -108,8 +147,8 @@ export async function getGitUpdateStatus({
   statePath = GIT_UPDATE_STATE_PATH,
 } = {}) {
   const pm2Process = getPm2ProcessName();
-  const operationState = reconcileRestartedOperation(readGitUpdateState(statePath), statePath);
-  const updateInProgress = isGitUpdateRunning(operationState);
+  let operationState = expireStaleOperation(readGitUpdateState(statePath), statePath);
+  let updateInProgress = isGitUpdateRunning(operationState);
   const repoRoot = outputOf(await runCommand("git", ["rev-parse", "--show-toplevel"], { cwd }));
 
   if (refresh && !updateInProgress) {
@@ -139,6 +178,20 @@ export async function getGitUpdateStatus({
   ]);
 
   const [ahead = 0, behind = 0] = outputOf(counts).split(/\s+/).map((value) => Number(value) || 0);
+  const currentCommitValue = outputOf(currentCommit);
+  const remoteCommitValue = outputOf(remoteCommit);
+  operationState = reconcileRestartedOperation(
+    operationState,
+    statePath,
+    Date.now(),
+    Date.now() - process.uptime() * 1000,
+    {
+      targetCommit: operationState?.targetCommit,
+      currentCommit: currentCommitValue,
+      remoteCommit: remoteCommitValue,
+    },
+  );
+  updateInProgress = isGitUpdateRunning(operationState);
   const dirty = Boolean(outputOf(porcelain));
   const updateAvailable = behind > 0;
   let blockedReason = null;
@@ -153,8 +206,8 @@ export async function getGitUpdateStatus({
     repoRoot,
     branch,
     upstream,
-    currentCommit: outputOf(currentCommit),
-    remoteCommit: outputOf(remoteCommit),
+    currentCommit: currentCommitValue,
+    remoteCommit: remoteCommitValue,
     latestSubject: outputOf(latestSubject),
     ahead,
     behind,
