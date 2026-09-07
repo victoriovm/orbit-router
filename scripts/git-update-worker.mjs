@@ -13,6 +13,16 @@ fs.mkdirSync(path.dirname(statePath), { recursive: true });
 fs.mkdirSync(path.dirname(logPath), { recursive: true });
 fs.writeFileSync(logPath, `[${new Date().toISOString()}] Git update started\n`, "utf8");
 
+// Keeps updatedAt fresh so the main app can tell a live worker from a crashed one.
+const heartbeat = setInterval(() => {
+  try {
+    writeState({});
+  } catch {
+    // transient write errors are retried on the next tick
+  }
+}, 30000);
+heartbeat.unref?.();
+
 function writeState(patch) {
   state = { ...state, ...patch, updatedAt: new Date().toISOString() };
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
@@ -38,7 +48,7 @@ function commandSpec(command, args) {
   };
 }
 
-function run(command, args, { phase, message, timeoutMs }) {
+function run(command, args, { phase, message, timeoutMs, captureStdout = false }) {
   writeState({ phase, message, error: null });
   appendLog(`\n[${new Date().toISOString()}] $ ${command} ${args.join(" ")}\n`);
   const invocation = commandSpec(command, args);
@@ -51,12 +61,16 @@ function run(command, args, { phase, message, timeoutMs }) {
       env: process.env,
     });
 
+    let stdout = "";
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
       reject(new Error(`${command} timed out`));
     }, timeoutMs);
 
-    child.stdout.on("data", (chunk) => appendLog(chunk.toString()));
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+      appendLog(chunk.toString());
+    });
     child.stderr.on("data", (chunk) => appendLog(chunk.toString()));
     child.on("error", (error) => {
       clearTimeout(timer);
@@ -64,7 +78,7 @@ function run(command, args, { phase, message, timeoutMs }) {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve();
+      if (code === 0) resolve(captureStdout ? stdout : undefined);
       else reject(new Error(`${command} exited with code ${code}`));
     });
   });

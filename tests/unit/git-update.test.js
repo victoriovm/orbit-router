@@ -32,7 +32,7 @@ function createGitCommandMock({ counts = "0\t2", porcelain = "" } = {}) {
       "rev-parse HEAD": "1111111111111111111111111111111111111111",
       "rev-parse @{upstream}": "2222222222222222222222222222222222222222",
       "rev-list --left-right --count HEAD...@{upstream}": counts,
-      "status --porcelain": porcelain,
+      "status --porcelain -uno": porcelain,
       "log -1 --pretty=%s @{upstream}": "Remote update",
     };
 
@@ -72,13 +72,41 @@ describe("getPm2ProcessName", () => {
 });
 
 describe("reconcileRestartedOperation", () => {
-  it("marks a restarting operation successful after the application process restarts", () => {
+  it("marks a restarting operation successful when the commit matches the target", () => {
     const restartRequestedAt = Date.parse("2026-08-26T10:00:00.000Z");
     const state = {
       operationId: "operation-1",
       status: "running",
       phase: "restarting",
       message: "Restarting application...",
+      startedAt: "2026-08-26T09:59:00.000Z",
+      updatedAt: new Date(restartRequestedAt).toISOString(),
+      finishedAt: null,
+      targetCommit: "aaaa1111",
+    };
+
+    const result = reconcileRestartedOperation(
+      state,
+      statePath,
+      restartRequestedAt + 10_000,
+      restartRequestedAt + 5_000,
+      { currentCommit: "aaaa1111", remoteCommit: "aaaa1111" },
+    );
+
+    expect(result).toMatchObject({
+      status: "success",
+      phase: "done",
+      message: "Update completed successfully.",
+    });
+    expect(readGitUpdateState(statePath)).toEqual(result);
+  });
+
+  it("marks a legacy restarting operation successful when HEAD matches the remote", () => {
+    const restartRequestedAt = Date.parse("2026-08-26T10:00:00.000Z");
+    const state = {
+      operationId: "operation-2",
+      status: "running",
+      phase: "restarting",
       startedAt: "2026-08-26T09:59:00.000Z",
       updatedAt: new Date(restartRequestedAt).toISOString(),
       finishedAt: null,
@@ -89,14 +117,31 @@ describe("reconcileRestartedOperation", () => {
       statePath,
       restartRequestedAt + 10_000,
       restartRequestedAt + 5_000,
+      { currentCommit: "bbbb2222", remoteCommit: "bbbb2222" },
     );
 
-    expect(result).toMatchObject({
-      status: "success",
-      phase: "done",
-      message: "Update completed successfully.",
-    });
-    expect(readGitUpdateState(statePath)).toEqual(result);
+    expect(result).toMatchObject({ status: "success", phase: "done" });
+  });
+
+  it("keeps the operation running when the commit does not match the target", () => {
+    const restartRequestedAt = Date.parse("2026-08-26T10:00:00.000Z");
+    const state = {
+      status: "running",
+      phase: "restarting",
+      updatedAt: new Date(restartRequestedAt).toISOString(),
+      targetCommit: "aaaa1111",
+    };
+
+    const result = reconcileRestartedOperation(
+      state,
+      statePath,
+      restartRequestedAt + 10_000,
+      restartRequestedAt + 5_000,
+      { currentCommit: "cccc3333", remoteCommit: "aaaa1111" },
+    );
+
+    expect(result).toBe(state);
+    expect(fs.existsSync(statePath)).toBe(false);
   });
 
   it("keeps the operation running in the original application process", () => {
@@ -197,12 +242,14 @@ describe("startGitUpdate", () => {
       spawnProcess,
       statePath,
       logPath,
+      targetCommit: "2222222222222222222222222222222222222222",
     });
 
     expect(operation).toMatchObject({ status: "running", phase: "starting" });
     expect(readGitUpdateState(statePath)).toMatchObject({
       operationId: operation.operationId,
       status: "running",
+      targetCommit: "2222222222222222222222222222222222222222",
     });
     expect(spawnProcess).toHaveBeenCalledWith(
       process.execPath,
@@ -218,6 +265,7 @@ describe("startGitUpdate", () => {
       statePath,
       logPath,
       processName: "router-production",
+      operation: { targetCommit: "2222222222222222222222222222222222222222" },
     });
   });
 

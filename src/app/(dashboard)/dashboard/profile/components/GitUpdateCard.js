@@ -82,21 +82,19 @@ export default function GitUpdateCard() {
 
       if (data.operation?.status === "error") {
         setFeedback({ type: "error", message: data.operation.error || "Update failed" });
-      } else if (data.operation?.status === "success") {
+      } else if (data.operation?.status === "success" && !data.updateAvailable) {
         setFeedback({ type: "success", message: data.operation.message || "Update completed successfully" });
         if (startedHereRef.current && !reloadScheduledRef.current) {
           reloadScheduledRef.current = true;
           setTimeout(() => globalThis.location.reload(), 1500);
         }
       } else if (!quiet) {
-        if (data.updateAvailable) {
+        if (data.updateAvailable && data.canUpdate) {
           setFeedback({
-            type: data.canUpdate ? "success" : "warning",
-            message: data.canUpdate
-              ? `${data.behind} update commit${data.behind === 1 ? "" : "s"} available.`
-              : data.blockedReason,
+            type: "success",
+            message: `${data.behind} update commit${data.behind === 1 ? "" : "s"} available.`,
           });
-        } else {
+        } else if (!data.updateAvailable) {
           setFeedback({ type: "", message: "" });
         }
       }
@@ -221,6 +219,15 @@ export default function GitUpdateCard() {
             description="The dashboard may disconnect briefly during the PM2 restart."
             tone="info"
             spin
+          />
+        )}
+
+        {status?.updateAvailable && !status?.canUpdate && !updateRunning && status?.blockedReason && (
+          <UpdateStatusNotice
+            icon="lock"
+            title="Automatic update currently not possible"
+            description={status.blockedReason}
+            tone="warning"
           />
         )}
 

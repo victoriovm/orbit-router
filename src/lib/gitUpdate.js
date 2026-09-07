@@ -9,6 +9,7 @@ import { DATA_DIR } from "./dataDir.js";
 const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 120000;
 const UPDATE_STALE_MS = 60 * 60 * 1000;
+const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 const DEFAULT_PM2_PROCESS = "9router";
 const VALID_PM2_PROCESS = /^[a-zA-Z0-9._:@/+\-]+$/;
 
@@ -67,7 +68,10 @@ export function writeGitUpdateState(state, statePath = GIT_UPDATE_STATE_PATH) {
 export function isGitUpdateRunning(state, now = Date.now()) {
   if (state?.status !== "running") return false;
   const startedAt = Date.parse(state.startedAt || "");
-  return Number.isFinite(startedAt) && now - startedAt < UPDATE_STALE_MS;
+  if (!Number.isFinite(startedAt) || now - startedAt >= UPDATE_STALE_MS) return false;
+  const updatedAt = Date.parse(state.updatedAt || "");
+  if (Number.isFinite(updatedAt) && now - updatedAt >= HEARTBEAT_STALE_MS) return false;
+  return true;
 }
 
 export function reconcileRestartedOperation(
@@ -87,10 +91,15 @@ export function reconcileRestartedOperation(
       && verification.currentCommit === targetCommit
       && (!verification.remoteCommit || verification.remoteCommit === targetCommit),
   );
+  // Operations recorded before targetCommit was tracked: treat as success when
+  // the restarted process already sits at the remote head.
+  const legacyVerified = !targetCommit
+    && Boolean(verification.currentCommit)
+    && verification.currentCommit === verification.remoteCommit;
   if (
     !Number.isFinite(restartRequestedAt)
     || processStartedAt <= restartRequestedAt
-    || !commitVerified
+    || !(commitVerified || legacyVerified)
   ) return state;
 
   const finishedAt = new Date(now).toISOString();
@@ -173,7 +182,7 @@ export async function getGitUpdateStatus({
     runCommand("git", ["rev-parse", "HEAD"], { cwd: repoRoot }),
     runCommand("git", ["rev-parse", "@{upstream}"], { cwd: repoRoot }),
     runCommand("git", ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"], { cwd: repoRoot }),
-    runCommand("git", ["status", "--porcelain"], { cwd: repoRoot }),
+    runCommand("git", ["status", "--porcelain", "-uno"], { cwd: repoRoot }),
     runCommand("git", ["log", "-1", "--pretty=%s", "@{upstream}"], { cwd: repoRoot }),
   ]);
 

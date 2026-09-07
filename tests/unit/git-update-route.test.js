@@ -85,6 +85,7 @@ describe("POST /api/version/git-update", () => {
       canUpdate: true,
       repoRoot: "/srv/9router",
       pm2Process: "router-production",
+      remoteCommit: "2222222222222222222222222222222222222222",
     });
     mocks.startGitUpdate.mockReturnValue(operation);
 
@@ -94,6 +95,7 @@ describe("POST /api/version/git-update", () => {
     expect(mocks.startGitUpdate).toHaveBeenCalledWith({
       repoRoot: "/srv/9router",
       processName: "router-production",
+      targetCommit: "2222222222222222222222222222222222222222",
     });
     expect(response.body).toMatchObject({ success: true, operation });
   });
