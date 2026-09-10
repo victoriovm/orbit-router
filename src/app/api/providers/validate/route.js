@@ -597,6 +597,31 @@ export async function POST(request) {
           break;
         }
 
+        case "phoenix-grove":
+        case "vultr":
+        case "novita": {
+          // /models is public here (any key gets 200), so the generic models probe can't
+          // tell a bad key from a good one. Probe chat instead: 401/403 auth errors and
+          // Vultr's 422 "Invalid API key" mean rejected; 400/404 model errors mean accepted.
+          const cfg = PROVIDERS[provider];
+          const res = await fetch(cfg.baseUrl, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${apiKey}`,
+              "content-type": "application/json",
+              ...(cfg.headers || {}),
+            },
+            body: JSON.stringify({
+              model: getDefaultModel(provider) || "test",
+              max_tokens: 1,
+              messages: [{ role: "user", content: "ping" }],
+            }),
+            signal: AbortSignal.timeout(10000),
+          });
+          isValid = res.status !== 401 && res.status !== 403 && res.status !== 422;
+          break;
+        }
+
         default: {
           // Generic probe for OpenAI-compatible providers (config-driven from PROVIDERS)
           const cfg = PROVIDERS[provider];

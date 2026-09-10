@@ -125,6 +125,9 @@ import p121 from "./alitp-intl.js";
 import p123 from "./digital-ocean.js";
 import p124 from "./verboo-code.js";
 import p125 from "./xquik.js";
+import p127 from "./phoenix-grove.js";
+import p128 from "./vultr.js";
+import p129 from "./novita.js";
 
 export default [
   p0,
@@ -251,4 +254,7 @@ export default [
   p123,
   p124,
   p125,
+  p127,
+  p128,
+  p129,
 ];

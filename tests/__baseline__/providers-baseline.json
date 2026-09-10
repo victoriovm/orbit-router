@@ -437,6 +437,9 @@
   "groq": {
     "baseUrl": "https://api.groq.com/openai/v1/chat/completions",
     "validateUrl": "https://api.groq.com/openai/v1/models",
+    "usage": {
+      "url": "https://api.groq.com/openai/v1/models"
+    },
     "format": "openai"
   },
   "hyperbolic": {
@@ -708,6 +711,9 @@
   "opencode-go": {
     "baseUrl": "https://opencode.ai/zen/go/v1/chat/completions",
     "headers": {},
+    "usage": {
+      "url": "https://opencode.ai/zen/go/v1/usage"
+    },
     "format": "openai",
     "transports": [
       {
@@ -1017,6 +1023,21 @@
   "verboo-code": {
     "baseUrl": "https://code.verboo.ai/router/v1/chat/completions",
     "validateUrl": "https://code.verboo.ai/router/v1/models",
+    "format": "openai"
+  },
+  "phoenix-grove": {
+    "baseUrl": "https://api.pgsgrove.com/v1/chat/completions",
+    "validateUrl": "https://api.pgsgrove.com/v1/models",
+    "format": "openai"
+  },
+  "vultr": {
+    "baseUrl": "https://api.vultrinference.com/v1/chat/completions",
+    "validateUrl": "https://api.vultrinference.com/v1/models",
+    "format": "openai"
+  },
+  "novita": {
+    "baseUrl": "https://api.novita.ai/openai/chat/completions",
+    "validateUrl": "https://api.novita.ai/openai/models",
     "format": "openai"
   }
 }
