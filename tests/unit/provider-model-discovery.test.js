@@ -19,8 +19,8 @@ describe("provider model discovery", () => {
   });
 
   it("derives /v1/models for providers without an explicit models endpoint", () => {
-    expect(createRegistryModelsConfig("agentrouter")).toMatchObject({
-      url: "https://agentrouter.org/v1/models",
+    expect(createRegistryModelsConfig("kimi")).toMatchObject({
+      url: "https://api.kimi.com/coding/v1/models",
       authHeader: "x-api-key",
       authPrefix: "",
     });

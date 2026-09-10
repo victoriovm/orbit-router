@@ -23,8 +23,6 @@
     "anthropic": "anthropic",
     "gemini": "gemini",
     "openrouter": "openrouter",
-    "agr": "agentrouter",
-    "agentrouter": "agentrouter",
     "glm": "glm",
     "kimi": "kimi",
     "minimax": "minimax",
@@ -125,7 +123,6 @@
     "digital-ocean": "digital-ocean"
   },
   "idToAlias": {
-    "agentrouter": "agr",
     "alicode": "alicode",
     "alicode-intl": "alicode-intl",
     "alims-intl": "alims-intl",
@@ -213,7 +210,6 @@
   "modelKeys": [
     "af",
     "ag",
-    "agr",
     "alicode",
     "alicode-intl",
     "alims-intl",
