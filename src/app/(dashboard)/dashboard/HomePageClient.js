@@ -56,12 +56,21 @@ function MetricCard({ label, value, detail, icon, tone = "text-text-main", loadi
   );
 }
 
-export default function InicioPageClient() {
+export default function HomePageClient() {
   const [usage, setUsage] = useState(null);
   const [connections, setConnections] = useState(null);
   const [models, setModels] = useState(null);
   const [failedSources, setFailedSources] = useState([]);
-  const [cachedModelsCount, setCachedModelsCount] = useState(null);
+  const [cachedModelsCount] = useState(() => {
+    try {
+      const v = typeof window !== "undefined" ? window.localStorage.getItem("homeModelsCount") : null;
+      if (v) {
+        const n = parseInt(v, 10);
+        if (Number.isFinite(n) && n >= 0) return n;
+      }
+    } catch {}
+    return null;
+  });
   const [loading, setLoading] = useState(true);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [locale, setLocale] = useState(() => getCurrentLocale());
@@ -114,31 +123,15 @@ export default function InicioPageClient() {
     };
 
     const loadModels = async () => {
-      // Fast path for home counter: ~50ms, no live resolvers
+      // Single full catalog fetch: the fast endpoint returns a smaller static
+      // list, so showing it first makes the counter flicker (e.g. 40 -> 120).
+      // Keep the skeleton visible until the final count arrives instead.
       try {
-        const data = await fetchWithTimeout("/api/models/catalog?fast=1", 1500);
+        const data = await fetchWithTimeout("/api/models/catalog", 8000);
         if (cancelled) return;
         const filtered = (data.data || []).filter((model) => !model.disabled);
         setModels(filtered);
-        setCachedModelsCount(filtered.length);
         try { window.localStorage.setItem("homeModelsCount", String(filtered.length)); } catch {}
-        setModelsLoading(false);
-        // Background refresh with full catalog (live resolvers) without blocking UI
-        fetchWithTimeout("/api/models/catalog", 5000).then((full) => {
-          if (cancelled) return;
-          const fullFiltered = (full.data || []).filter((m) => !m.disabled);
-          if (fullFiltered.length !== filtered.length) { setModels(fullFiltered); setCachedModelsCount(fullFiltered.length); try { window.localStorage.setItem("homeModelsCount", String(fullFiltered.length)); } catch {} }
-        }).catch(() => {});
-        return;
-      } catch {}
-      // Fallback: try full catalog if fast failed
-      try {
-        const data = await fetchWithTimeout("/api/models/catalog", 5000);
-        if (cancelled) return;
-        const _m = (data.data || []).filter((model) => !model.disabled);
-        setModels(_m);
-        setCachedModelsCount(_m.length);
-        try { window.localStorage.setItem("homeModelsCount", String(_m.length)); } catch {}
       } catch {
         if (cancelled) return;
         setModels([]);
@@ -154,16 +147,6 @@ export default function InicioPageClient() {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    try {
-      const v = window.localStorage.getItem("homeModelsCount");
-      if (v) {
-        const n = parseInt(v, 10);
-        if (Number.isFinite(n) && n >= 0) setCachedModelsCount(n);
-      }
-    } catch {}
   }, []);
 
   useEffect(() => {
@@ -219,9 +202,10 @@ export default function InicioPageClient() {
   }, [connections]);
 
   const estimatedModelsCount = useMemo(() => {
+    // Only used if the catalog request fails; never show a guessed number
+    // while loading, otherwise the counter flickers.
     if (models !== null) return null;
-    if (cachedModelsCount !== null && !connections) return cachedModelsCount;
-    if (!connections) return cachedModelsCount ?? 0;
+    if (!connections) return null;
     let count = 0;
     for (const conn of connections.filter((c) => c.isActive !== false)) {
       const pid = conn.provider;
@@ -230,12 +214,11 @@ export default function InicioPageClient() {
       if (Array.isArray(enabled) && enabled.length > 0) count += enabled.filter((id) => typeof id === "string" && id.trim() !== "").length;
       else count += staticModels.length;
     }
-    if (cachedModelsCount !== null && count === 0) return cachedModelsCount;
     return count;
-  }, [connections, models, cachedModelsCount]);
+  }, [connections, models]);
 
-  const displayModelsCount = models !== null ? models.length : (estimatedModelsCount ?? cachedModelsCount ?? 0);
-  const displayModelsLoading = false;
+  const displayModelsCount = models !== null ? models.length : (modelsLoading ? null : (estimatedModelsCount ?? cachedModelsCount ?? 0));
+  const displayModelsLoading = modelsLoading;
 
   const allEnabledAccountsHealthy = providerStats.healthyAccounts === providerStats.enabledAccounts;
   const allEnabledAccountsUnhealthy = providerStats.healthyAccounts === 0;
@@ -253,7 +236,7 @@ export default function InicioPageClient() {
   const recentRequests = (usage?.recentRequests || []).slice(0, 6);
 
   return (
-    <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
+    <div className="flex w-full max-w-full min-w-0 flex-col gap-6 overflow-x-hidden px-1 sm:px-0">
       {failedSources.length > 0 && (
         <div className="flex items-start gap-3 rounded-[12px] border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-text-main">
           <span className="material-symbols-outlined text-[20px] text-warning">warning</span>
@@ -265,7 +248,7 @@ export default function InicioPageClient() {
 
       <section aria-label={translate("Gateway overview")} className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
         <MetricCard label={translate("Providers")} value={providerStats.providers} detail={translate("Connected")} icon="dns" tone="text-orange-500" loading={loading && connections === null} />
-        <MetricCard label={translate("Models")} value={numberFormatter.format(displayModelsCount)} detail={translate("Available")} icon="deployed_code" tone="text-cyan-400" loading={displayModelsLoading} />
+        <MetricCard label={translate("Models")} value={displayModelsCount === null ? "" : numberFormatter.format(displayModelsCount)} detail={translate("Available")} icon="deployed_code" tone="text-cyan-400" loading={displayModelsLoading} />
         <MetricCard label={translate("Requests")} value={numberFormatter.format(usage?.totalRequests || 0)} detail={translate("Today")} icon="send" tone="text-primary" loading={loading && usage === null} />
         <MetricCard label={translate("Tokens")} value={numberFormatter.format(tokensToday)} detail={translate("Used today")} icon="token" tone="text-info" loading={loading && usage === null} />
         <MetricCard label={translate("In progress")} value={numberFormatter.format(activeRequests)} detail={translate("Active requests")} icon="design_services" tone="text-success" loading={loading && usage === null} />
@@ -321,7 +304,7 @@ export default function InicioPageClient() {
         </Card>
       </section>
 
-      <section className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
+      <section className="grid w-full max-w-full min-w-0 grid-cols-1 gap-6 overflow-hidden xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Card
           title={translate("Recent requests")}
           subtitle={translate("Latest processed calls")}
@@ -329,6 +312,7 @@ export default function InicioPageClient() {
           iconClassName="text-[21px]"
           iconContainerClassName="bg-info/10 text-info"
           padding="sm"
+          className="w-full max-w-full min-w-0 overflow-hidden"
         >
           {loading && usage === null ? (
             <div className="space-y-2">
@@ -339,9 +323,9 @@ export default function InicioPageClient() {
               {translate("Requests will appear here after the first gateway call.")}
             </div>
           ) : (
-            <div className="divide-y divide-border-subtle">
+            <div className="divide-y divide-border-subtle overflow-hidden">
               {recentRequests.map((request, index) => (
-                <div key={`${request.timestamp}-${request.provider}-${request.model}-${index}`} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+                <div key={`${request.timestamp}-${request.provider}-${request.model}-${index}`} className="flex min-w-0 items-center gap-3 py-3 first:pt-0 last:pb-0">
                   <span className="flex size-9 shrink-0 items-center justify-center">
                     <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${request.status === "error" ? "bg-danger" : "bg-success"}`} />
                   </span>
@@ -349,9 +333,9 @@ export default function InicioPageClient() {
                     <p className="truncate text-sm font-medium text-text-main">{request.model || translate("Model not provided")}</p>
                     <p className="truncate text-xs text-text-muted">{request.provider || translate("Provider not provided")}</p>
                   </div>
-                  <div className="shrink-0 text-right">
-                    <p className="text-xs font-medium text-text-main">{numberFormatter.format((request.promptTokens || 0) + (request.completionTokens || 0))} {translate("tokens")}</p>
-                    <p className="text-[11px] text-text-muted">{formatRelativeTime(request.timestamp, relativeTimeFormatter)}</p>
+                  <div className="min-w-0 shrink-0 text-right">
+                    <p className="whitespace-nowrap text-xs font-medium text-text-main">{numberFormatter.format((request.promptTokens || 0) + (request.completionTokens || 0))} {translate("tokens")}</p>
+                    <p className="whitespace-nowrap text-[11px] text-text-muted">{formatRelativeTime(request.timestamp, relativeTimeFormatter)}</p>
                   </div>
                 </div>
               ))}
@@ -366,13 +350,14 @@ export default function InicioPageClient() {
           iconClassName="text-[21px]"
           iconContainerClassName="bg-warning/10 text-warning"
           padding="sm"
+          className="w-full max-w-full min-w-0 overflow-hidden"
         >
-          <nav aria-label={translate("Dashboard shortcuts")} className="flex flex-col gap-2">
+          <nav aria-label={translate("Dashboard shortcuts")} className="flex min-w-0 flex-col gap-2">
             {quickLinks.map((item) => (
-              <Link key={item.href} href={item.href} className="group flex items-center gap-3 rounded-[10px] border border-border-subtle bg-bg px-3 py-3 transition-colors hover:border-primary/30 hover:bg-bg-hover">
-                <span className="material-symbols-outlined text-[20px] text-text-muted group-hover:text-primary">{item.icon}</span>
-                <span className="flex-1 text-sm font-medium text-text-main">{translate(item.label)}</span>
-                <span className="material-symbols-outlined text-[16px] text-text-muted">chevron_right</span>
+              <Link key={item.href} href={item.href} className="group flex min-w-0 items-center gap-3 rounded-[10px] border border-border-subtle bg-bg px-3 py-3 transition-colors hover:border-primary/30 hover:bg-bg-hover">
+                <span className="material-symbols-outlined shrink-0 text-[20px] text-text-muted group-hover:text-primary">{item.icon}</span>
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-main">{translate(item.label)}</span>
+                <span className="material-symbols-outlined shrink-0 text-[16px] text-text-muted">chevron_right</span>
               </Link>
             ))}
           </nav>

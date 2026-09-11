@@ -27,7 +27,7 @@ export default function Card({
   return (
     <div
       className={cn(
-        "bg-surface border border-border-subtle",
+        "bg-surface border border-border-subtle min-w-0",
         elev ? "rounded-[14px] shadow-[var(--shadow-elev)]" : "rounded-[14px] shadow-[var(--shadow-soft)]",
         hover && "hover:shadow-[var(--shadow-warm)] hover:border-brand-500/30 transition-all cursor-pointer",
         paddings[padding],
