@@ -59,20 +59,9 @@ function MetricCard({ label, value, detail, icon, tone = "text-text-main", loadi
 export default function HomePageClient() {
   const [usage, setUsage] = useState(null);
   const [connections, setConnections] = useState(null);
-  const [models, setModels] = useState(null);
+  const [modelsCount, setModelsCount] = useState(null);
   const [failedSources, setFailedSources] = useState([]);
-  const [cachedModelsCount] = useState(() => {
-    try {
-      const v = typeof window !== "undefined" ? window.localStorage.getItem("homeModelsCount") : null;
-      if (v) {
-        const n = parseInt(v, 10);
-        if (Number.isFinite(n) && n >= 0) return n;
-      }
-    } catch {}
-    return null;
-  });
   const [loading, setLoading] = useState(true);
-  const [modelsLoading, setModelsLoading] = useState(true);
   const [locale, setLocale] = useState(() => getCurrentLocale());
 
   useEffect(() => onLocaleChange(() => setLocale(getCurrentLocale())), []);
@@ -101,10 +90,13 @@ export default function HomePageClient() {
       }
     };
 
-    const loadEssential = async () => {
+    // The five counters are one snapshot: fetch them together and only release
+    // the skeleton once every source settled, so they never paint one at a time.
+    const loadOverview = async () => {
       const sources = [
         ["usage statistics", "/api/usage/stats?period=today", 4000],
         ["providers", "/api/providers", 4000],
+        ["models", "/api/models/count", 4000],
       ];
       const results = await Promise.allSettled(
         sources.map(async ([label, url, timeout]) => fetchWithTimeout(url, timeout)),
@@ -117,32 +109,14 @@ export default function HomePageClient() {
       else failures.push(sources[0][0]);
       if (results[1].status === "fulfilled") setConnections(results[1].value.connections || []);
       else failures.push(sources[1][0]);
+      if (results[2].status === "fulfilled") setModelsCount(Number(results[2].value?.count) || 0);
+      else failures.push(sources[2][0]);
 
       if (failures.length) setFailedSources((prev) => [...prev, ...failures]);
       setLoading(false);
     };
 
-    const loadModels = async () => {
-      // Single full catalog fetch: the fast endpoint returns a smaller static
-      // list, so showing it first makes the counter flicker (e.g. 40 -> 120).
-      // Keep the skeleton visible until the final count arrives instead.
-      try {
-        const data = await fetchWithTimeout("/api/models/catalog", 8000);
-        if (cancelled) return;
-        const filtered = (data.data || []).filter((model) => !model.disabled);
-        setModels(filtered);
-        try { window.localStorage.setItem("homeModelsCount", String(filtered.length)); } catch {}
-      } catch {
-        if (cancelled) return;
-        setModels([]);
-        setFailedSources((prev) => (prev.includes("models") ? prev : [...prev, "models"]));
-      } finally {
-        if (!cancelled) setModelsLoading(false);
-      }
-    };
-
-    loadEssential();
-    loadModels();
+    loadOverview();
 
     return () => {
       cancelled = true;
@@ -202,9 +176,9 @@ export default function HomePageClient() {
   }, [connections]);
 
   const estimatedModelsCount = useMemo(() => {
-    // Only used if the catalog request fails; never show a guessed number
+    // Only used if the count request fails; never show a guessed number
     // while loading, otherwise the counter flickers.
-    if (models !== null) return null;
+    if (modelsCount !== null) return null;
     if (!connections) return null;
     let count = 0;
     for (const conn of connections.filter((c) => c.isActive !== false)) {
@@ -215,10 +189,9 @@ export default function HomePageClient() {
       else count += staticModels.length;
     }
     return count;
-  }, [connections, models]);
+  }, [connections, modelsCount]);
 
-  const displayModelsCount = models !== null ? models.length : (modelsLoading ? null : (estimatedModelsCount ?? cachedModelsCount ?? 0));
-  const displayModelsLoading = modelsLoading;
+  const displayModelsCount = modelsCount ?? estimatedModelsCount ?? 0;
 
   const allEnabledAccountsHealthy = providerStats.healthyAccounts === providerStats.enabledAccounts;
   const allEnabledAccountsUnhealthy = providerStats.healthyAccounts === 0;
@@ -247,11 +220,11 @@ export default function HomePageClient() {
       )}
 
       <section aria-label={translate("Gateway overview")} className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
-        <MetricCard label={translate("Providers")} value={providerStats.providers} detail={translate("Connected")} icon="dns" tone="text-orange-500" loading={loading && connections === null} />
-        <MetricCard label={translate("Models")} value={displayModelsCount === null ? "" : numberFormatter.format(displayModelsCount)} detail={translate("Available")} icon="deployed_code" tone="text-cyan-400" loading={displayModelsLoading} />
-        <MetricCard label={translate("Requests")} value={numberFormatter.format(usage?.totalRequests || 0)} detail={translate("Today")} icon="send" tone="text-primary" loading={loading && usage === null} />
-        <MetricCard label={translate("Tokens")} value={numberFormatter.format(tokensToday)} detail={translate("Used today")} icon="token" tone="text-info" loading={loading && usage === null} />
-        <MetricCard label={translate("In progress")} value={numberFormatter.format(activeRequests)} detail={translate("Active requests")} icon="design_services" tone="text-success" loading={loading && usage === null} />
+        <MetricCard label={translate("Providers")} value={providerStats.providers} detail={translate("Connected")} icon="dns" tone="text-orange-500" loading={loading} />
+        <MetricCard label={translate("Models")} value={numberFormatter.format(displayModelsCount)} detail={translate("Available")} icon="deployed_code" tone="text-cyan-400" loading={loading} />
+        <MetricCard label={translate("Requests")} value={numberFormatter.format(usage?.totalRequests || 0)} detail={translate("Today")} icon="send" tone="text-primary" loading={loading} />
+        <MetricCard label={translate("Tokens")} value={numberFormatter.format(tokensToday)} detail={translate("Used today")} icon="token" tone="text-info" loading={loading} />
+        <MetricCard label={translate("In progress")} value={numberFormatter.format(activeRequests)} detail={translate("Active requests")} icon="design_services" tone="text-success" loading={loading} />
       </section>
 
       <section className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">

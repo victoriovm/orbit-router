@@ -430,7 +430,7 @@ export async function buildModelsList(kindFilter, options = {}) {
       // -thinking/-agentic variants per account). On failure, fall back to
       // whatever rawModelIds already holds.
       const liveResolver = LIVE_MODEL_RESOLVERS[providerId];
-      if (liveResolver && !hasExplicitEnabledModels) {
+      if (!fastMode && liveResolver && !hasExplicitEnabledModels) {
         try {
           const live = await withTimeout(liveResolver(conn), 3500);
           if (live?.models?.length) {
