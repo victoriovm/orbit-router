@@ -41,8 +41,12 @@ export function ensureToolCallIds(body) {
           tc.type = "function";
         }
         // Ensure arguments is JSON string, not object
-        if (tc.function?.arguments && typeof tc.function.arguments !== "string") {
-          tc.function.arguments = JSON.stringify(tc.function.arguments);
+        if (tc.function && typeof tc.function === "object") {
+          if (tc.function.arguments == null || tc.function.arguments === "") {
+            tc.function.arguments = "{}";
+          } else if (typeof tc.function.arguments !== "string") {
+            tc.function.arguments = JSON.stringify(tc.function.arguments);
+          }
         }
       }
     }
