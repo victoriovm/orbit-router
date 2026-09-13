@@ -503,6 +503,20 @@ export function createSSEStream(options = {}) {
           streamDoneSent = true;
         }
 
+        // Translate mode must also terminate OpenAI-client streams with [DONE].
+        // Cross-format upstreams (Responses message_stop/completed, Claude
+        // message_stop) carry no [DONE] sentinel to forward, and the transform
+        // loop drops upstream sentinels — without this, OpenAI-compatible
+        // clients (opencode AI-SDK, OpenClaw) hang until timeout on a stream
+        // that already delivered finish_reason. Other client formats have
+        // their own terminators (or reject the sentinel, like Gemini-family).
+        if (!streamDoneSent && sourceFormat === FORMATS.OPENAI) {
+          const doneOutput = "data: [DONE]\n\n";
+          reqLogger?.appendConvertedChunk?.(doneOutput);
+          controller.enqueue(sharedEncoder.encode(doneOutput));
+          streamDoneSent = true;
+        }
+
         finalizeStream();
       } catch (error) {
         console.log("Error in flush:", error);
