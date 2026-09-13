@@ -4,7 +4,7 @@ import { createSSETransformStreamWithLogger, createPassthroughStreamWithLogger }
 import { pipeWithDisconnect } from "../../utils/streamHandler.js";
 import { PROVIDERS } from "../../config/providers.js";
 import { STREAM_STALL_TIMEOUT_MS } from "../../config/runtimeConfig.js";
-import { buildAbortedResponsesTerminalBytes } from "../../utils/responsesStreamHelpers.js";
+import { buildAbortedResponsesTerminalBytes, buildAbortedChatTerminalBytes } from "../../utils/responsesStreamHelpers.js";
 import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
 import { saveRequestDetail } from "@/lib/usageDb.js";
 import { SSE_HEADERS_CORS as SSE_HEADERS } from "../../utils/sseConstants.js";
@@ -81,9 +81,13 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
 
   const transformStream = buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, customToolNames, model, connectionId, body, onStreamComplete, apiKey, credentials });
 
-  // Responses passthrough: synthesize response.failed + [DONE] if the stream aborts/stalls before a terminal event
+  // Responses passthrough: synthesize response.failed + [DONE] if the stream aborts/stalls before a terminal event.
+  // Chat (OpenAI/Claude): synthesize an error payload + transport error so
+  // clients retry the turn instead of treating truncation as completion.
   const isResponsesPassthrough = sourceFormat === FORMATS.OPENAI_RESPONSES && targetFormat === FORMATS.OPENAI_RESPONSES;
-  const onAbortTerminal = isResponsesPassthrough ? buildAbortedResponsesTerminalBytes : null;
+  const onAbortTerminal = isResponsesPassthrough
+    ? buildAbortedResponsesTerminalBytes
+    : () => buildAbortedChatTerminalBytes(sourceFormat);
   const stallTimeoutMs = PROVIDERS[provider]?.stallTimeoutMs || STREAM_STALL_TIMEOUT_MS;
   const transformedBody = pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal, stallTimeoutMs);
 

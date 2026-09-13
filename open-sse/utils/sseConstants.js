@@ -14,10 +14,15 @@ export const SSE_HEADERS_NO_BUFFER = {
   "X-Accel-Buffering": "no"
 };
 
-// Variant for client-facing SSE responses (adds permissive CORS)
+// Variant for client-facing SSE responses (adds permissive CORS).
+// X-Accel-Buffering:no + no-transform keep long-lived streams flowing through
+// nginx / Cloudflare instead of being buffered until completion (Muse thinking
+// and tool_use deltas can leave the downstream idle long enough for middleboxes
+// to kill the connection with ECONNRESET/socket hang up).
 export const SSE_HEADERS_CORS = {
   "Content-Type": "text/event-stream",
-  "Cache-Control": "no-cache",
+  "Cache-Control": "no-cache, no-transform",
   "Connection": "keep-alive",
+  "X-Accel-Buffering": "no",
   "Access-Control-Allow-Origin": "*"
 };

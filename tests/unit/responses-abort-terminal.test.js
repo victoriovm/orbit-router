@@ -51,7 +51,7 @@ describe("Responses abort terminal synthesis", () => {
     expect(text).toContain("data: [DONE]");
   });
 
-  it("does not synthesize terminal for non-Responses streams (callback null)", async () => {
+  it("surfaces a transport error for non-Responses streams without terminal (no silent close)", async () => {
     const upstream = new ReadableStream({
       start(controller) {
         controller.enqueue(new TextEncoder().encode("data: hi\n\n"));
@@ -65,8 +65,8 @@ describe("Responses abort terminal synthesis", () => {
       null
     );
 
-    const text = await readAll(out);
-    expect(text).not.toContain("response.failed");
-    expect(text).not.toContain("[DONE]");
+    // Mid-stream network failure without a structured terminal must reject so
+    // clients retry instead of treating truncation as a complete stream.
+    await expect(readAll(out)).rejects.toThrow("socket hang up");
   });
 });

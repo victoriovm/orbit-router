@@ -83,7 +83,7 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
       onError?.(error);
     },
 
-    abort: () => abortController.abort()
+    abort: (reason) => abortController.abort(reason)
   };
 }
 
@@ -114,8 +114,21 @@ export function createDisconnectAwareStream(transformStream, streamController, o
   return new ReadableStream({
     async pull(controller) {
       if (!streamController.isConnected()) {
+        // Stall watchdog marks the controller disconnected before aborting the
+        // fetch, so a plain isConnected check would turn stalls into clean EOF.
+        // Stalls are mid-stream failures: emit the error terminal (if any) and
+        // surface a transport error — unless the terminal explicitly opts out
+        // (Responses response.failed + [DONE] keeps graceful close for codex).
         emitTerminal(controller);
-        controller.close();
+        const graceful = onAbortTerminal?.terminalIsError === false;
+        const stalled = streamController.isStalled?.() === true;
+        if (!graceful && stalled) {
+          try {
+            controller.error(streamController.stallError?.() || new Error("stream stall timeout"));
+          } catch { /* already closed or cancelled */ }
+        } else {
+          controller.close();
+        }
         return;
       }
 
@@ -151,14 +164,26 @@ export function createDisconnectAwareStream(transformStream, streamController, o
           code === "ETIMEDOUT" ||
           code === "EPIPE" ||
           code === "UND_ERR_SOCKET";
+        // Stall watchdog aborts the fetch after handleError already marked the
+        // controller disconnected — still a mid-stream failure, never a clean EOF.
+        // Prefer the explicit stall flag (abort reasons don't reliably propagate
+        // to the body-stream error message) with message sniffing as fallback.
+        const isStall = msg.includes("stall timeout") || streamController.isStalled?.() === true;
 
-        // Graceful close on network/abort, or when a structured terminal is available
-        // (Responses passthrough prefers response.failed + [DONE] over a raw transport error)
+        // Client already gone (disconnect/cancel race, normal completion): the
+        // downstream is gone, so close quietly. Everything else is a mid-stream
+        // upstream failure and must surface as a transport error so OpenAI/Claude
+        // SDKs retry the turn instead of treating a truncated stream as complete.
+        // Error terminals (chat failed payloads) are emitted first for clients
+        // that parse them (defense in depth). Responses terminals
+        // (response.failed + [DONE]) explicitly opt out via terminalIsError=false
+        // to preserve the graceful-close contract codex/droid CLIs rely on.
         try {
-          if (!wasConnected || isNetworkClose || onAbortTerminal) {
+          if ((!wasConnected && !isStall) || onAbortTerminal?.terminalIsError === false) {
             emitTerminal(controller);
             controller.close();
           } else {
+            emitTerminal(controller);
             controller.error(error);
           }
         } catch (e) { /* already closed or cancelled */ }
@@ -194,6 +219,8 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
   let chunkCount = 0;
   let totalBytes = 0;
   let lastChunkAt = Date.now();
+  let stallFired = false;
+  let stallError = null;
   const t0 = Date.now();
   const tag = "STREAM";
   const clearStall = () => {
@@ -203,9 +230,11 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
     clearStall();
     stallTimer = setTimeout(() => {
       stallTimer = null;
+      stallFired = true;
+      stallError = new Error("stream stall timeout");
       dbg(tag, `STALL TIMEOUT ${stallTimeoutMs}ms | chunks=${chunkCount} | bytes=${totalBytes} | sinceLast=${Date.now() - lastChunkAt}ms`);
-      streamController.handleError?.(new Error("stream stall timeout"));
-      streamController.abort?.();
+      streamController.handleError?.(stallError);
+      streamController.abort?.(stallError);
     }, stallTimeoutMs);
   };
 
@@ -216,10 +245,12 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
     signal: streamController.signal,
     startTime: streamController.startTime,
     isConnected: () => streamController.isConnected(),
+    isStalled: () => stallFired,
+    stallError: () => stallError,
     handleComplete: () => { dbg(tag, `complete | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleComplete(); },
     handleError: (e) => { dbg(tag, `error: ${e?.message} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleError(e); },
     handleDisconnect: (r) => { dbg(tag, `disconnect: ${r} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleDisconnect(r); },
-    abort: () => { clearStall(); streamController.abort(); }
+    abort: (reason) => { clearStall(); streamController.abort(reason); }
   };
 
   armStall();
