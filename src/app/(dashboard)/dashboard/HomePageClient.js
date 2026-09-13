@@ -3,10 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Card from "@/shared/components/Card";
-import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "@/shared/constants/models";
 import { getCurrentLocale, onLocaleChange, translate } from "@/i18n/runtime";
-import dynamic from "next/dynamic";
-const UsageChart = dynamic(() => import("./usage/components/UsageChart"), { ssr: false, loading: () => null });
+import HomeUsageChart from "./HomeUsageChart";
 
 const quickLinks = [
   { href: "/dashboard/endpoint", label: "Configure endpoint", icon: "key" },
@@ -57,11 +55,9 @@ function MetricCard({ label, value, detail, icon, tone = "text-text-main", loadi
 }
 
 export default function HomePageClient() {
-  const [usage, setUsage] = useState(null);
-  const [connections, setConnections] = useState(null);
-  const [modelsCount, setModelsCount] = useState(null);
-  const [failedSources, setFailedSources] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [overview, setOverview] = useState(null);
+  const [exactModelsCount, setExactModelsCount] = useState(null);
+  const [overviewFailed, setOverviewFailed] = useState(false);
   const [locale, setLocale] = useState(() => getCurrentLocale());
 
   useEffect(() => onLocaleChange(() => setLocale(getCurrentLocale())), []);
@@ -90,33 +86,26 @@ export default function HomePageClient() {
       }
     };
 
-    // The five counters are one snapshot: fetch them together and only release
-    // the skeleton once every source settled, so they never paint one at a time.
-    const loadOverview = async () => {
-      const sources = [
-        ["usage statistics", "/api/usage/stats?period=today", 4000],
-        ["providers", "/api/providers", 4000],
-        ["models", "/api/models/count", 4000],
-      ];
-      const results = await Promise.allSettled(
-        sources.map(async ([label, url, timeout]) => fetchWithTimeout(url, timeout)),
-      );
-
-      if (cancelled) return;
-
-      const failures = [];
-      if (results[0].status === "fulfilled") setUsage(results[0].value);
-      else failures.push(sources[0][0]);
-      if (results[1].status === "fulfilled") setConnections(results[1].value.connections || []);
-      else failures.push(sources[1][0]);
-      if (results[2].status === "fulfilled") setModelsCount(Number(results[2].value?.count) || 0);
-      else failures.push(sources[2][0]);
-
-      if (failures.length) setFailedSources((prev) => [...prev, ...failures]);
-      setLoading(false);
-    };
-
-    loadOverview();
+    // One round-trip paints the whole page: counters, provider health, recent
+    // requests and the chart arrive together. The exact live models number
+    // refreshes in the background without blocking first paint.
+    fetchWithTimeout("/api/dashboard/overview", 8000)
+      .then((data) => {
+        if (cancelled) return;
+        setOverview(data);
+      })
+      .catch(() => {
+        if (!cancelled) setOverviewFailed(true);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        fetchWithTimeout("/api/models/count", 8000)
+          .then((data) => {
+            const count = Number(data?.count);
+            if (Number.isFinite(count)) setExactModelsCount(count);
+          })
+          .catch(() => {});
+      });
 
     return () => {
       cancelled = true;
@@ -129,12 +118,16 @@ export default function HomePageClient() {
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        setUsage((current) => current ? {
+        // The stream only carries realtime fields — keep the overview payload
+        // when a tick omits them.
+        setOverview((current) => current ? {
           ...current,
-          activeRequests: data.activeRequests,
-          recentRequests: data.recentRequests,
-          errorProvider: data.errorProvider,
-          pending: data.pending,
+          usage: {
+            ...current.usage,
+            ...(data.activeRequests !== undefined ? { activeRequests: data.activeRequests } : null),
+            ...(data.pending !== undefined ? { pending: data.pending } : null),
+            ...(data.errorProvider !== undefined ? { errorProvider: data.errorProvider } : null),
+          },
         } : current);
       } catch (error) {
         console.error("[HOME USAGE SSE] parse error:", error);
@@ -143,6 +136,9 @@ export default function HomePageClient() {
 
     return () => eventSource.close();
   }, []);
+
+  const connections = overview?.providers?.connections || null;
+  const usage = overview?.usage || null;
 
   const providerStats = useMemo(() => {
     const allConnections = connections || [];
@@ -166,32 +162,19 @@ export default function HomePageClient() {
     });
 
     return {
-      providers: providerIds.size,
-      enabledAccounts: enabled.length,
-      healthyAccounts: healthy.length,
-      healthyProviders: groups.filter((group) => group.healthy > 0).length,
-      attentionProviders: groups.filter((group) => group.enabled > 0 && group.healthy === 0).length,
-      disabledProviders: groups.filter((group) => group.enabled === 0).length,
+      providers: overview?.providers?.providers ?? providerIds.size,
+      enabledAccounts: overview?.providers?.enabledAccounts ?? enabled.length,
+      healthyAccounts: overview?.providers?.healthyAccounts ?? healthy.length,
+      healthyProviders: overview?.providers?.healthyProviders ?? groups.filter((group) => group.healthy > 0).length,
+      attentionProviders: overview?.providers?.attentionProviders ?? groups.filter((group) => group.enabled > 0 && group.healthy === 0).length,
+      disabledProviders: overview?.providers?.disabledProviders ?? groups.filter((group) => group.enabled === 0).length,
     };
-  }, [connections]);
+  }, [connections, overview]);
 
-  const estimatedModelsCount = useMemo(() => {
-    // Only used if the count request fails; never show a guessed number
-    // while loading, otherwise the counter flickers.
-    if (modelsCount !== null) return null;
-    if (!connections) return null;
-    let count = 0;
-    for (const conn of connections.filter((c) => c.isActive !== false)) {
-      const pid = conn.provider;
-      const staticModels = PROVIDER_MODELS[pid] || PROVIDER_MODELS[PROVIDER_ID_TO_ALIAS[pid]] || [];
-      const enabled = conn.providerSpecificData?.enabledModels;
-      if (Array.isArray(enabled) && enabled.length > 0) count += enabled.filter((id) => typeof id === "string" && id.trim() !== "").length;
-      else count += staticModels.length;
-    }
-    return count;
-  }, [connections, modelsCount]);
-
-  const displayModelsCount = modelsCount ?? estimatedModelsCount ?? 0;
+  // Local-tables estimate paints instantly; the exact live count swaps in when
+  // the background /api/models/count request resolves.
+  const displayModelsCount = exactModelsCount ?? overview?.modelsCount ?? 0;
+  const loading = overview === null;
 
   const allEnabledAccountsHealthy = providerStats.healthyAccounts === providerStats.enabledAccounts;
   const allEnabledAccountsUnhealthy = providerStats.healthyAccounts === 0;
@@ -206,15 +189,15 @@ export default function HomePageClient() {
     0,
   );
   const tokensToday = (usage?.totalPromptTokens || 0) + (usage?.totalCompletionTokens || 0);
-  const recentRequests = (usage?.recentRequests || []).slice(0, 6);
+  const recentRequests = (usage?.recentRequests || overview?.recentRequests || []).slice(0, 6);
 
   return (
     <div className="flex w-full max-w-full min-w-0 flex-col gap-6 overflow-x-hidden px-1 sm:px-0">
-      {failedSources.length > 0 && (
+      {overviewFailed && (
         <div className="flex items-start gap-3 rounded-[12px] border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-text-main">
           <span className="material-symbols-outlined text-[20px] text-warning">warning</span>
           <p>
-            {translate("Could not load")} {failedSources.map(translate).join(", ")}. {translate("The remaining information is still available.")}
+            {translate("Could not load")} {translate("dashboard overview")}. {translate("The remaining information is still available.")}
           </p>
         </div>
       )}
@@ -229,7 +212,7 @@ export default function HomePageClient() {
 
       <section className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
         <div className="min-w-0">
-          <UsageChart period="7d" />
+          <HomeUsageChart data={overview?.chart || null} loading={loading} />
         </div>
         <Card title={translate("Provider health")} subtitle={translate("Enabled account status")} icon="health_and_safety" padding="sm" className="flex h-full flex-col">
           {loading && connections === null ? (
@@ -339,5 +322,3 @@ export default function HomePageClient() {
     </div>
   );
 }
-
-

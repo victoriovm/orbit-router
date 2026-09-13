@@ -68,6 +68,9 @@ export {
   appendRequestLog, getRecentLogs,
 } from "./repos/usageRepo.js";
 
+// Dashboard home overview (single bounded round-trip)
+export { getDashboardOverview } from "./repos/overviewRepo.js";
+
 // Request details
 export {
   saveRequestDetail, getRequestDetails, getRequestDetailById, getDistinctProviders,

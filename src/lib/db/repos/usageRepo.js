@@ -274,8 +274,8 @@ export function trackPendingRequest(model, provider, connectionId, started, erro
   emitPendingEvent();
 }
 
-export async function getActiveRequests() {
-  const connectionMap = await getConnectionMapCached();
+export async function getActiveRequests(connectionMapOverride) {
+  const connectionMap = connectionMapOverride || await getConnectionMapCached();
   const activeRequests = buildActiveRequests(connectionMap);
 
   await ensureRingInitialized();

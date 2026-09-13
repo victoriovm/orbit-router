@@ -1,27 +1,24 @@
-import { getUsageStats, statsEmitter, getActiveRequests } from "@/lib/usageDb";
+import { statsEmitter, getActiveRequests } from "@/lib/usageDb";
 
 export const dynamic = "force-dynamic";
 
+// Live part of the home page: active requests + pending counters only.
+// The initial snapshot is the same lightweight payload as every tick —
+// callers get today's totals via GET /api/dashboard/overview and keep this
+// stream for realtime deltas. Never runs the full getUsageStats() aggregation
+// (full history scans + JSON parsing) per tick: that made every stream event
+// as expensive as the page's first load.
 export async function GET() {
   const encoder = new TextEncoder();
-  const state = { closed: false, keepalive: null, send: null, sendPending: null, cachedStats: null };
+  const state = { closed: false, keepalive: null, send: null, sendPending: null };
 
   const stream = new ReadableStream({
     async start(controller) {
-      // Full stats refresh (heavy) + immediate lightweight push
       state.send = async () => {
         if (state.closed) return;
         try {
-          // Push lightweight update immediately so UI reflects changes fast
-          if (state.cachedStats) {
-            const { activeRequests, recentRequests, errorProvider, pending } = await getActiveRequests();
-            const quickStats = { ...state.cachedStats, activeRequests, recentRequests, errorProvider, pending };
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(quickStats)}\n\n`));
-          }
-          // Then do full recalc and update cache
-          const stats = await getUsageStats();
-          state.cachedStats = stats;
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(stats)}\n\n`));
+          const snapshot = await getActiveRequests();
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(snapshot)}\n\n`));
         } catch {
           state.closed = true;
           statsEmitter.off("update", state.send);
@@ -30,12 +27,12 @@ export async function GET() {
         }
       };
 
-      // Lightweight push: only refresh activeRequests + recentRequests on pending changes
       state.sendPending = (pending) => {
-        if (state.closed || !state.cachedStats) return;
+        if (state.closed) return;
         try {
-          const stats = { ...state.cachedStats, activeRequests: [], pending };
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(stats)}\n\n`));
+          // Same wire shape as before (activeRequests resets while pending),
+          // but without re-sending a full cached stats snapshot.
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ activeRequests: [], pending })}\n\n`));
         } catch {
           state.closed = true;
           statsEmitter.off("update", state.send);

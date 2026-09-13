@@ -308,15 +308,16 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
-        // Always merge only real-time fields, never overwrite full stats from REST
+        // The stream only carries realtime fields (activeRequests, pending, …)
+        // — keep the REST-loaded aggregates when a tick omits them.
         setStats((prev) => {
           if (!prev) return prev;
           return {
             ...prev,
-            activeRequests: data.activeRequests,
-            recentRequests: data.recentRequests,
-            errorProvider: data.errorProvider,
-            pending: data.pending,
+            activeRequests: data.activeRequests ?? prev.activeRequests,
+            recentRequests: data.recentRequests ?? prev.recentRequests,
+            errorProvider: data.errorProvider ?? prev.errorProvider,
+            pending: data.pending ?? prev.pending,
           };
         });
         if (hasLoadedStats.current) setLoading(false);
