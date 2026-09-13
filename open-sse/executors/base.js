@@ -1,4 +1,4 @@
-import { HTTP_STATUS, RETRY_CONFIG, DEFAULT_RETRY_CONFIG, MAX_RETRY_AFTER_MS, parseRetryAfterMs, resolveRetryEntry, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
+import { HTTP_STATUS, RETRY_CONFIG, DEFAULT_RETRY_CONFIG, resolveRetryEntry, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { shouldRefreshCredentials } from "../services/oauthCredentialManager.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { dbg } from "../utils/debugLog.js";
@@ -89,15 +89,16 @@ export class BaseExecutor {
     return null;
   }
 
-  // Default hook for tryRetry: honor upstream Retry-After hints (capped at
-  // MAX_RETRY_AFTER_MS), else return null to keep the configured static
-  // delayMs. Returns false to veto the retry when the hint exceeds the cap
-  // (caller falls back to the next URL/account instead of sleeping).
-  // Subclasses (e.g. antigravity) override this for provider-specific parsing.
-  async computeRetryDelay(response, attempt, delayMs) {
-    const retryMs = parseRetryAfterMs(response?.headers);
-    if (retryMs == null) return null;
-    return retryMs <= MAX_RETRY_AFTER_MS ? retryMs : false;
+  // Retry config for a model. Subclasses override to scope extra attempts to
+  // specific models without changing the outcome for the rest of the provider.
+  getRetryConfig(model) {
+    return this.config?.retry;
+  }
+
+  // Connect (response-headers) timeout for a model. Subclasses override to give
+  // specific models a longer prefill budget than the global default.
+  getConnectTimeoutMs(model) {
+    return this.config?.timeoutMs || FETCH_CONNECT_TIMEOUT_MS;
   }
 
   needsRefresh(credentials) {
@@ -114,8 +115,8 @@ export class BaseExecutor {
     let lastStatus = 0;
     const retryAttemptsByUrl = {};
 
-    // Merge default retry config with provider-specific config
-    const retryConfig = { ...DEFAULT_RETRY_CONFIG, ...this.config.retry };
+    // Merge default retry config with the model-scoped provider config
+    const retryConfig = { ...DEFAULT_RETRY_CONFIG, ...this.getRetryConfig(model) };
 
     // Schedule retry via retryConfig[statusKey]. Returns true when caller should `urlIndex--; continue`
     // response (optional) lets a subclass hook compute a dynamic delay (e.g. antigravity Retry-After).
@@ -125,7 +126,7 @@ export class BaseExecutor {
       // Hook: subclass may derive delay from the response (headers/body). null → skip retry, use fallback.
       let waitMs = delayMs;
       if (response && this.computeRetryDelay) {
-        const dynamic = await this.computeRetryDelay(response, retryAttemptsByUrl[urlIndex] + 1, delayMs);
+        const dynamic = await this.computeRetryDelay(response, retryAttemptsByUrl[urlIndex] + 1, delayMs, model);
         if (dynamic === false) return false; // hook vetoes retry (e.g. Retry-After too long)
         if (dynamic != null) waitMs = dynamic;
       }
@@ -144,7 +145,7 @@ export class BaseExecutor {
 
       // Abort if upstream doesn't return response headers within connection timeout
       const connectCtrl = new AbortController();
-      const timeoutMs = this.config?.timeoutMs || FETCH_CONNECT_TIMEOUT_MS;
+      const timeoutMs = this.getConnectTimeoutMs(model);
       const connectTimer = setTimeout(() => connectCtrl.abort(new Error("fetch connect timeout")), timeoutMs);
       const mergedSignal = signal ? AbortSignal.any([signal, connectCtrl.signal]) : connectCtrl.signal;
 

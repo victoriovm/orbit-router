@@ -55,9 +55,8 @@ export function formatIncompleteOpenAIResponsesStreamFailure() {
 // hang up, stall) before any terminal chunk (finish_reason / message_stop).
 // Without this, clients (e.g. opencode SessionRetry) see a truncated stream
 // followed by [DONE] and assume the turn completed, so they never retry.
-// Flagged terminalIsError so streamHandler surfaces a transport error right
-// after emitting the payload (defense in depth); the Responses terminal keeps
-// terminalIsError=false to preserve the codex/droid graceful-close contract.
+// Only built for Muse Spark requests; the caller also enables
+// surfaceMidStreamErrors so a transport error follows the payload.
 const STREAM_DISCONNECTED_MESSAGE =
   "stream closed before terminal chunk (upstream disconnect/stall)";
 
@@ -92,5 +91,3 @@ export function buildAbortedChatTerminalBytes(sourceFormat) {
       : formatIncompleteOpenAIChatStreamFailure();
   return sharedEncoder.encode(payload);
 }
-buildAbortedChatTerminalBytes.terminalIsError = true;
-buildAbortedResponsesTerminalBytes.terminalIsError = false;

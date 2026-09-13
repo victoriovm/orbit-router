@@ -89,4 +89,24 @@ describe("openaiToOpenAIResponsesRequest: synthetic user message handling", () =
     // When input is empty, don't drop the initial message so request doesn't have empty input
     expect(out.input.length).toBeGreaterThan(0);
   });
+
+  it("keeps synthetic user messages and snip_id text for non-Muse-Spark models", () => {
+    const body = {
+      model: "big-pickle",
+      messages: [
+        { role: "user", content: "Read the file" },
+        { role: "tool", tool_call_id: "call_123", content: "file content here" },
+        {
+          role: "user",
+          content: "<system-reminder>snip_id=6i5550; system-generated; for snip tool use only.</system-reminder>",
+        },
+      ],
+    };
+
+    const out = openaiToOpenAIResponsesRequest("big-pickle", body, true, null);
+    const lastItem = out.input[out.input.length - 1];
+    expect(lastItem.type).toBe("message");
+    expect(lastItem.role).toBe("user");
+    expect(lastItem.content[0].text).toContain("snip_id=");
+  });
 });

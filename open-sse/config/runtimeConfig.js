@@ -61,9 +61,16 @@ export const STREAM_FIRST_CHUNK_TIMEOUT_MS = envMs("STREAM_FIRST_CHUNK_TIMEOUT_M
 // Env: SSE_HEARTBEAT_INTERVAL_MS.
 export const SSE_HEARTBEAT_INTERVAL_MS = envMs("SSE_HEARTBEAT_INTERVAL_MS", 15 * 1000);
 
-// Fetch connect timeout: abort if upstream doesn't return response headers within this duration.
-// Reasoning models (o1/o3/Muse Spark) with large contexts (300k+ tokens) can take >60s for TTFT under load.
-export const FETCH_CONNECT_TIMEOUT_MS = envMs("FETCH_CONNECT_TIMEOUT_MS", 120 * 1000);
+// Fetch connect timeout: abort if upstream doesn't return response headers within this duration
+export const FETCH_CONNECT_TIMEOUT_MS = envMs("FETCH_CONNECT_TIMEOUT_MS", 60 * 1000);
+
+// Muse Spark (OpenCode Zen /responses) tuning. Reasoning payloads of 300k+
+// tokens regularly exceed the default connect budget under load, and Zen
+// accounts rate-limit per account — both are worth handling in place for these
+// models only. Other providers/models keep the defaults above.
+// Env: MUSE_SPARK_CONNECT_TIMEOUT_MS.
+export const MUSE_SPARK_CONNECT_TIMEOUT_MS = envMs("MUSE_SPARK_CONNECT_TIMEOUT_MS", 120 * 1000);
+export const MUSE_SPARK_RETRY_CONFIG = { 429: { attempts: 2, delayMs: 2000 } };
 
 // Gemini native TTS fetch timeout: abort if Google does not return response headers in time.
 export const GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS = envMs("GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS", 45 * 1000);
@@ -83,7 +90,7 @@ export const RETRY_CONFIG = {
 // Default retry config by status code: { attempts, delayMs }
 // Backward compat: if value is a number, treated as attempts with RETRY_CONFIG.delayMs
 export const DEFAULT_RETRY_CONFIG = {
-  429: { attempts: 2, delayMs: 2000 },
+  429: { attempts: 0, delayMs: 0 },
   502: { attempts: 3, delayMs: 3000 },
   503: { attempts: 3, delayMs: 2000 },
   504: { attempts: 2, delayMs: 3000 }

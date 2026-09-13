@@ -1,5 +1,5 @@
 // Stream handler with disconnect detection - shared for all providers
-import { STREAM_STALL_TIMEOUT_MS, STREAM_FIRST_CHUNK_TIMEOUT_MS, SSE_HEARTBEAT_INTERVAL_MS } from "../config/runtimeConfig.js";
+import { STREAM_STALL_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { SSE_HEARTBEAT } from "./sseConstants.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
 
@@ -102,7 +102,10 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
 export function createDisconnectAwareStream(transformStream, streamController, onAbortTerminal = null, options = {}) {
   const reader = transformStream.readable.getReader();
   const writer = transformStream.writable.getWriter();
-  const heartbeatMs = options.heartbeatMs ?? SSE_HEARTBEAT_INTERVAL_MS;
+  const heartbeatMs = options.heartbeatMs ?? 0;
+  // Muse Spark requests opt in to surfacing mid-stream failures as transport
+  // errors; everything else keeps the legacy graceful-close contract.
+  const surfaceErrors = options.surfaceMidStreamErrors === true;
   let terminalEmitted = false;
   let pendingRead = null;
   let heartbeatTimer = null;
@@ -117,19 +120,21 @@ export function createDisconnectAwareStream(transformStream, streamController, o
     } catch { /* best-effort terminal */ }
   };
 
-  // Shared terminal path for pulls that find the controller already finished:
-  // client disconnects close quietly, while upstream failures (stalls, logged
-  // errors) surface a transport error so clients retry. Responses terminals
-  // explicitly opt out (terminalIsError=false) to preserve the graceful-close
-  // contract codex/droid CLIs rely on. Plain controllers without pipe metadata
-  // (unit stubs) keep the legacy close behavior.
+  // Shared terminal path for pulls that find the controller already finished.
+  // Muse Spark (surfaceErrors): client disconnects close quietly, upstream
+  // failures (stalls, logged errors) surface a transport error so clients
+  // retry. Everyone else keeps the legacy emit-terminal + graceful close.
+  // Plain controllers without pipe metadata (unit stubs) also close.
   const finishDownstream = (controller) => {
     emitTerminal(controller);
-    const graceful = onAbortTerminal?.terminalIsError === false;
     const hasPipeInfo = typeof streamController.isStalled === "function";
+    if (!surfaceErrors || !hasPipeInfo) {
+      controller.close();
+      return;
+    }
     const clientGone = streamController.isClientGone?.() === true;
     const stalled = streamController.isStalled?.() === true;
-    if (graceful || clientGone || !hasPipeInfo) {
+    if (clientGone) {
       controller.close();
     } else if (stalled) {
       try {
@@ -229,16 +234,21 @@ export function createDisconnectAwareStream(transformStream, streamController, o
         // to the body-stream error message) with message sniffing as fallback.
         const isStall = msg.includes("stall timeout") || streamController.isStalled?.() === true;
 
-        // Client already gone (disconnect/cancel race, normal completion): the
-        // downstream is gone, so close quietly. Everything else is a mid-stream
-        // upstream failure and must surface as a transport error so OpenAI/Claude
-        // SDKs retry the turn instead of treating a truncated stream as complete.
-        // Error terminals (chat failed payloads) are emitted first for clients
-        // that parse them (defense in depth). Responses terminals
-        // (response.failed + [DONE]) explicitly opt out via terminalIsError=false
-        // to preserve the graceful-close contract codex/droid CLIs rely on.
+        // Legacy path (every non-Muse-Spark request): network resets / aborts
+        // close quietly, and a structured terminal (Responses response.failed)
+        // still emits before closing.
+        // Muse Spark (surfaceErrors): the client being gone is the only quiet
+        // path; any other mid-stream upstream failure surfaces as a transport
+        // error (after the error terminal) so SDKs retry the truncated turn.
         try {
-          if ((!wasConnected && !isStall) || onAbortTerminal?.terminalIsError === false) {
+          if (!surfaceErrors) {
+            if (!wasConnected || isNetworkClose || onAbortTerminal) {
+              emitTerminal(controller);
+              controller.close();
+            } else {
+              controller.error(error);
+            }
+          } else if (!wasConnected && !isStall) {
             emitTerminal(controller);
             controller.close();
           } else {
@@ -270,19 +280,24 @@ export function createDisconnectAwareStream(transformStream, streamController, o
  *
  * Any upstream chunk resets the timer. If no bytes arrive for
  * STREAM_STALL_TIMEOUT_MS, abort the underlying fetch via the controller.
- * A separate time-to-first-byte timer (STREAM_FIRST_CHUNK_TIMEOUT_MS) catches
- * hangs during prompt prefill, where the stall timer alone would wait the full
- * inter-chunk budget before noticing nothing ever arrived.
+ * An optional time-to-first-byte timer catches hangs during prompt prefill,
+ * where the stall timer alone would wait the full inter-chunk budget before
+ * noticing nothing ever arrived.
  *
  * @param {Response} providerResponse - Response from provider
  * @param {TransformStream} transformStream - Transform stream for SSE
  * @param {object} streamController - Stream controller from createStreamController
  * @param {function} [onAbortTerminal] - Synthesized terminal payload builder
  * @param {number} [stallTimeoutMs] - Inter-chunk stall budget
- * @param {number} [heartbeatMs] - Downstream `: ping` interval while silent
- * @param {number} [firstChunkTimeoutMs] - Time-to-first-byte budget
+ * @param {object} [options]
+ * @param {number} [options.heartbeatMs] - Downstream `: ping` interval while silent (0 disables)
+ * @param {number} [options.firstChunkTimeoutMs] - Time-to-first-byte budget (0 disables)
+ * @param {boolean} [options.surfaceMidStreamErrors] - Emit transport errors for
+ *   mid-stream upstream failures instead of closing gracefully (Muse Spark)
  */
-export function pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal = null, stallTimeoutMs = STREAM_STALL_TIMEOUT_MS, heartbeatMs = SSE_HEARTBEAT_INTERVAL_MS, firstChunkTimeoutMs = STREAM_FIRST_CHUNK_TIMEOUT_MS) {
+export function pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal = null, stallTimeoutMs = STREAM_STALL_TIMEOUT_MS, options = {}) {
+  const heartbeatMs = options.heartbeatMs ?? 0;
+  const firstChunkTimeoutMs = options.firstChunkTimeoutMs ?? 0;
   let stallTimer = null;
   let firstChunkTimer = null;
   let chunkCount = 0;
@@ -334,13 +349,15 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
   };
 
   armStall();
-  firstChunkTimer = setTimeout(() => {
-    firstChunkTimer = null;
-    if (chunkCount === 0) {
-      clearStall();
-      fireTimeout("ttft", firstChunkTimeoutMs);
-    }
-  }, firstChunkTimeoutMs);
+  if (firstChunkTimeoutMs > 0) {
+    firstChunkTimer = setTimeout(() => {
+      firstChunkTimer = null;
+      if (chunkCount === 0) {
+        clearStall();
+        fireTimeout("ttft", firstChunkTimeoutMs);
+      }
+    }, firstChunkTimeoutMs);
+  }
   dbg(tag, `pipe start | stallTimeout=${stallTimeoutMs}ms | ttftTimeout=${firstChunkTimeoutMs}ms | heartbeat=${heartbeatMs}ms`);
 
   const upstreamTap = new TransformStream({
@@ -369,7 +386,7 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
     { readable: transformedBody, writable: { getWriter: () => ({ abort: () => Promise.resolve() }) } },
     wrappedController,
     onAbortTerminal,
-    { heartbeatMs }
+    { heartbeatMs, surfaceMidStreamErrors: options.surfaceMidStreamErrors }
   );
 }
 

@@ -7,7 +7,10 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: (...args) => fetchMock(...args),
 }));
 
-const { BaseExecutor } = await import("../../open-sse/executors/base.js");
+const { OpenCodeExecutor } = await import("../../open-sse/executors/opencode.js");
+
+// Muse Spark is the only scope for Zen Retry-After handling and 429 retries.
+const MUSE = "muse-spark-1.3-contributor-free";
 
 function res(status, headers = {}) {
   return { status, headers: new Headers(headers) };
@@ -46,50 +49,61 @@ describe("parseRetryAfterMs", () => {
   });
 });
 
-describe("BaseExecutor.computeRetryDelay (default hook)", () => {
-  const ex = new BaseExecutor("test", { baseUrl: "https://x/api" });
+describe("OpenCodeExecutor.computeRetryDelay (Muse Spark scope)", () => {
+  const ex = new OpenCodeExecutor();
 
-  it("honors Retry-After within the cap", async () => {
-    const delay = await ex.computeRetryDelay(res(503, { "retry-after": "2" }), 1, 2000);
+  it("honors Retry-After within the cap for Muse Spark", async () => {
+    const delay = await ex.computeRetryDelay(res(503, { "retry-after": "2" }), 1, 2000, MUSE);
     expect(delay).toBe(2000);
   });
 
   it("vetoes retry when Retry-After exceeds the cap", async () => {
     const delay = await ex.computeRetryDelay(
-      res(429, { "retry-after": String(MAX_RETRY_AFTER_MS / 1000 + 60) }), 1, 2000
+      res(429, { "retry-after": String(MAX_RETRY_AFTER_MS / 1000 + 60) }), 1, 2000, MUSE
     );
     expect(delay).toBe(false);
   });
 
   it("returns null without headers so static delayMs applies", async () => {
-    await expect(ex.computeRetryDelay(res(502), 1, 3000)).resolves.toBeNull();
+    await expect(ex.computeRetryDelay(res(502), 1, 3000, MUSE)).resolves.toBeNull();
+  });
+
+  it("ignores Retry-After for non-Muse-Spark models", async () => {
+    await expect(
+      ex.computeRetryDelay(res(503, { "retry-after": "2" }), 1, 2000, "big-pickle")
+    ).resolves.toBeNull();
   });
 });
 
-describe("BaseExecutor.execute — Retry-After integration", () => {
+describe("OpenCodeExecutor.execute — Muse Spark retry behavior", () => {
   const creds = { apiKey: "k" };
 
-  it("sleeps the hinted delay then retries the same URL", async () => {
-    const ex = new BaseExecutor("test", {
-      baseUrl: "https://x/api",
-      retry: { 429: { attempts: 1, delayMs: 0 } },
-    });
+  it("retries 429 with the hinted delay for Muse Spark", async () => {
     fetchMock
       .mockResolvedValueOnce(res(429, { "retry-after-ms": "20" }))
       .mockResolvedValueOnce(res(200));
-    const out = await ex.execute({ model: "m", body: {}, stream: false, credentials: creds });
+    const out = await new OpenCodeExecutor().execute({ model: MUSE, body: {}, stream: false, credentials: creds });
     expect(out.response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("vetoes retry on huge Retry-After and returns the response for account fallback", async () => {
-    const ex = new BaseExecutor("test", {
-      baseUrl: "https://x/api",
-      retry: { 429: { attempts: 2, delayMs: 0 } },
-    });
     fetchMock.mockResolvedValueOnce(res(429, { "retry-after": "3600" }));
-    const out = await ex.execute({ model: "m", body: {}, stream: false, credentials: creds });
+    const out = await new OpenCodeExecutor().execute({ model: MUSE, body: {}, stream: false, credentials: creds });
     expect(out.response.status).toBe(429);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry 429 for non-Muse-Spark models (global default unchanged)", async () => {
+    fetchMock.mockResolvedValueOnce(res(429, { "retry-after": "2" }));
+    const out = await new OpenCodeExecutor().execute({ model: "big-pickle", body: {}, stream: false, credentials: creds });
+    expect(out.response.status).toBe(429);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the longer connect budget only for Muse Spark", () => {
+    const ex = new OpenCodeExecutor();
+    expect(ex.getConnectTimeoutMs(MUSE)).toBe(120 * 1000);
+    expect(ex.getConnectTimeoutMs("big-pickle")).toBe(60 * 1000);
   });
 });

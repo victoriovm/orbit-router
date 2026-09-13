@@ -74,12 +74,10 @@ http.createServer = (...args) => {
   };
   const server = origCreate(...rest, wrapped);
   server.once("listening", () => {
-    // Long-lived SSE streams must survive slow reasoning gaps: keep sockets
-    // alive past typical reverse-proxy idle timeouts (nginx 60s) and never
-    // kill an in-flight request server-side (requestTimeout=0). headersTimeout
-    // must exceed keepAliveTimeout per Node requirements.
-    server.keepAliveTimeout = 65000;
-    server.headersTimeout = 70000;
+    // Node's default requestTimeout (300s) kills long-lived SSE responses
+    // server-side. This is a server-level setting and cannot be scoped per
+    // model/provider, so disable it; it only relaxes a limit and does not
+    // change behavior for regular requests.
     server.requestTimeout = 0;
     startBackgroundTokenRefreshFromCustomServer();
   });

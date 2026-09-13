@@ -13,6 +13,7 @@ import {
   coerceResponsesOutput,
 } from "../formats/responsesApi.js";
 import { ROLE, OPENAI_BLOCK, RESPONSES_ITEM } from "../schema/index.js";
+import { isMuseSparkModel } from "../../providers/models/helpers.js";
 
 const MAX_TOOL_NAME_LEN = 128;
 
@@ -284,6 +285,7 @@ const SNIP_ID_REMINDER_RE = /<system-reminder>\s*snip_id=[^<]*<\/system-reminder
 /**
  * Check if user content has substantive text after stripping internal system reminders
  * (e.g. snip_id metadata or system reminder tags injected by agent frameworks).
+ * Only consulted for Muse Spark targets.
  */
 function hasSubstantiveUserContent(content) {
   if (!content) return false;
@@ -409,6 +411,9 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
   // Extract system message as instructions
   let hasSystemMessage = false;
   const messages = body.messages || [];
+  // Synthetic-turn handling below is tuned for Muse Spark on the Responses
+  // API; every other model keeps the untouched message history.
+  const museSpark = isMuseSparkModel(model);
 
   for (const msg of messages) {
     if (msg.role === ROLE.SYSTEM || msg.role === ROLE.DEVELOPER) {
@@ -423,12 +428,12 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
 
     // Convert user/assistant messages to input items
     if (msg.role === ROLE.USER || msg.role === ROLE.ASSISTANT) {
-      // Skip synthetic user messages that contain only internal system reminders / snip_id
-      // metadata (injected by coding-agent CLIs like orbit-code / Claude Code).
-      // In Responses API, a trailing user turn right after tool results breaks the model's
-      // autonomous execution chain and causes it to output a text status update instead of
-      // calling tools. Real user turns contain substantive text outside of <system-reminder>.
-      if (msg.role === ROLE.USER && result.input.length > 0 && !hasSubstantiveUserContent(msg.content)) {
+      // Muse Spark: skip synthetic user messages that contain only internal system
+      // reminders / snip_id metadata (injected by coding-agent CLIs like orbit-code /
+      // Claude Code). A trailing user turn right after tool results breaks Muse's
+      // autonomous execution chain and causes a text status update instead of tool
+      // calls. Real user turns contain substantive text outside of <system-reminder>.
+      if (museSpark && msg.role === ROLE.USER && result.input.length > 0 && !hasSubstantiveUserContent(msg.content)) {
         continue;
       }
 
@@ -441,13 +446,13 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
       }
 
       const contentType = msg.role === ROLE.USER ? RESPONSES_ITEM.INPUT_TEXT : RESPONSES_ITEM.OUTPUT_TEXT;
+      const sanitize = (text) => (museSpark && msg.role === ROLE.USER ? sanitizeUserText(text) : text);
       const content = typeof msg.content === "string"
-        ? [{ type: contentType, text: msg.role === ROLE.USER ? sanitizeUserText(msg.content) : msg.content }]
+        ? [{ type: contentType, text: sanitize(msg.content) }]
         : Array.isArray(msg.content)
           ? msg.content.map(c => {
             if (c.type === OPENAI_BLOCK.TEXT) {
-              const text = msg.role === ROLE.USER ? sanitizeUserText(c.text) : c.text;
-              return { type: contentType, text };
+              return { type: contentType, text: sanitize(c.text) };
             }
             // Convert Chat Completions image_url → Responses API input_image
             // Responses API expects: { type: "input_image", image_url: "<url string>" }
@@ -463,13 +468,13 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
           })
           : [];
 
-      // Filter out any empty text items that resulted from sanitizing
-      const validContent = content.filter(c => {
+      // Filter out any empty text items that resulted from sanitizing (Muse Spark only)
+      const validContent = museSpark ? content.filter(c => {
         if (c.type === RESPONSES_ITEM.INPUT_TEXT || c.type === RESPONSES_ITEM.OUTPUT_TEXT) {
           return typeof c.text === "string" && c.text.length > 0;
         }
         return true;
-      });
+      }) : content;
 
       // Only push a message block if content is non-empty.
       // Assistant messages with only tool_calls have content: null — skip the

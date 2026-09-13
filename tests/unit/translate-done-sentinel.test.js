@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 import { createSSETransformStreamWithLogger } from "../../open-sse/utils/stream.js";
 
-async function runTranslate(input, targetFormat, sourceFormat) {
+const MUSE = "muse-spark-1.3-contributor-free";
+
+async function runTranslate(input, targetFormat, sourceFormat, model = MUSE) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     start(controller) {
@@ -19,7 +21,7 @@ async function runTranslate(input, targetFormat, sourceFormat) {
       "opencode",
       null,
       null,
-      "muse-spark-1.3-contributor-free",
+      model,
     ),
   );
 
@@ -76,6 +78,18 @@ describe("translate-mode [DONE] sentinel", () => {
       FORMATS.CLAUDE
     );
 
+    expect(output).not.toContain("data: [DONE]");
+  });
+
+  it("does not append [DONE] for non-Muse-Spark models", async () => {
+    const output = await runTranslate(
+      RESPONSES_TEXT_STREAM,
+      FORMATS.OPENAI_RESPONSES,
+      FORMATS.OPENAI,
+      "big-pickle"
+    );
+
+    expect(output).toContain('"finish_reason":"stop"');
     expect(output).not.toContain("data: [DONE]");
   });
 });

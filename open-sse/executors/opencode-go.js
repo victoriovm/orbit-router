@@ -3,6 +3,13 @@ import { DefaultExecutor } from "./default.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
 import {
+  FETCH_CONNECT_TIMEOUT_MS,
+  MAX_RETRY_AFTER_MS,
+  MUSE_SPARK_CONNECT_TIMEOUT_MS,
+  MUSE_SPARK_RETRY_CONFIG,
+  parseRetryAfterMs,
+} from "../config/runtimeConfig.js";
+import {
   normalizeResponsesInput,
   clampResponsesCallId,
   coerceResponsesArguments,
@@ -115,6 +122,28 @@ export class OpenCodeGoExecutor extends DefaultExecutor {
     // Muse Spark lives on /responses even when a stale runtimeTransport leaks in.
     if (isResponsesModel(model)) return RESPONSES_BASE_URL;
     return super.buildUrl(model, stream, urlIndex, credentials);
+  }
+
+  // Muse Spark only: wait out per-account rate limits in place and allow a
+  // longer prefill budget for large reasoning payloads. Other OpenCode Go
+  // models keep the global defaults.
+  getRetryConfig(model) {
+    const base = this.config?.retry;
+    return isMuseSparkModel(model) ? { ...base, ...MUSE_SPARK_RETRY_CONFIG } : base;
+  }
+
+  getConnectTimeoutMs(model) {
+    return isMuseSparkModel(model)
+      ? MUSE_SPARK_CONNECT_TIMEOUT_MS
+      : (this.config?.timeoutMs || FETCH_CONNECT_TIMEOUT_MS);
+  }
+
+  async computeRetryDelay(response, attempt, delayMs, model) {
+    if (!isMuseSparkModel(model)) return null;
+    const retryMs = parseRetryAfterMs(response?.headers);
+    if (retryMs == null) return null;
+    // Hint above the cap vetoes the retry so account fallback runs immediately.
+    return retryMs <= MAX_RETRY_AFTER_MS ? retryMs : false;
   }
 
   prepareRequestCredentials({ body, credentials, providerSessionId, clientTool } = {}) {

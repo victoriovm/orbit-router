@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { createDisconnectAwareStream, createStreamController, pipeWithDisconnect } from "../../open-sse/utils/streamHandler.js";
-import {
-  buildAbortedChatTerminalBytes,
-  buildAbortedResponsesTerminalBytes,
-} from "../../open-sse/utils/responsesStreamHelpers.js";
+import { buildAbortedChatTerminalBytes } from "../../open-sse/utils/responsesStreamHelpers.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
+
+// Muse Spark chat streams opt in to surfacing mid-stream failures this way.
+const SURFACE = { surfaceMidStreamErrors: true };
 
 // Minimal stream controller stub
 function makeController() {
@@ -57,7 +57,8 @@ describe("Chat abort terminal synthesis", () => {
     const out = createDisconnectAwareStream(
       { readable: erroringUpstream("socket hang up"), writable: { getWriter: passthrough } },
       makeController(),
-      () => buildAbortedChatTerminalBytes(FORMATS.OPENAI)
+      () => buildAbortedChatTerminalBytes(FORMATS.OPENAI),
+      SURFACE
     );
 
     const { text, thrown } = await readUntilError(out);
@@ -70,7 +71,8 @@ describe("Chat abort terminal synthesis", () => {
     const out = createDisconnectAwareStream(
       { readable: erroringUpstream("ECONNRESET"), writable: { getWriter: passthrough } },
       makeController(),
-      () => buildAbortedChatTerminalBytes(FORMATS.CLAUDE)
+      () => buildAbortedChatTerminalBytes(FORMATS.CLAUDE),
+      SURFACE
     );
 
     const { text, thrown } = await readUntilError(out);
@@ -90,17 +92,13 @@ describe("Chat abort terminal synthesis", () => {
     const out = createDisconnectAwareStream(
       { readable: erroringUpstream("stream stall timeout"), writable: { getWriter: passthrough } },
       ctl,
-      () => buildAbortedChatTerminalBytes(FORMATS.OPENAI)
+      () => buildAbortedChatTerminalBytes(FORMATS.OPENAI),
+      SURFACE
     );
 
     const { text, thrown } = await readUntilError(out);
     expect(text).toContain("stream_disconnected");
     expect(thrown?.message).toContain("stall timeout");
-  });
-
-  it("flags chat terminals as errors and Responses terminals as graceful", () => {
-    expect(buildAbortedChatTerminalBytes.terminalIsError).toBe(true);
-    expect(buildAbortedResponsesTerminalBytes.terminalIsError).toBe(false);
   });
 
   it("emits : ping heartbeats while upstream stays silent", async () => {
@@ -130,7 +128,8 @@ describe("Chat abort terminal synthesis", () => {
     const out = createDisconnectAwareStream(
       { readable: erroringUpstream("socket hang up"), writable: { getWriter: passthrough } },
       ctl,
-      () => buildAbortedChatTerminalBytes(FORMATS.OPENAI)
+      () => buildAbortedChatTerminalBytes(FORMATS.OPENAI),
+      SURFACE
     );
 
     // Client-initiated disconnect: terminal may flush, but the stream ends
@@ -149,6 +148,20 @@ describe("Chat abort terminal synthesis", () => {
         break;
       }
     }
+    expect(thrown).toBeNull();
+  });
+
+  it("keeps the legacy graceful close without an error terminal (non-Muse-Spark)", async () => {
+    // No terminal builder = non-Muse-Spark request: network resets must keep
+    // closing quietly instead of surfacing transport errors.
+    const out = createDisconnectAwareStream(
+      { readable: erroringUpstream("socket hang up"), writable: { getWriter: passthrough } },
+      makeController(),
+      null
+    );
+
+    const { text, thrown } = await readUntilError(out);
+    expect(text).not.toContain("stream_disconnected");
     expect(thrown).toBeNull();
   });
 });
@@ -172,8 +185,7 @@ describe("pipeWithDisconnect time-to-first-byte timeout", () => {
       ctl,
       () => buildAbortedChatTerminalBytes(FORMATS.OPENAI),
       5000, // stall budget (irrelevant: zero bytes)
-      0, // heartbeat disabled for this test
-      30 // ttft budget: fires while chunkCount === 0
+      { firstChunkTimeoutMs: 30, surfaceMidStreamErrors: true }
     );
 
     const { text, thrown } = await readUntilError(out);

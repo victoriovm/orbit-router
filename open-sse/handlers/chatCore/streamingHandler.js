@@ -3,8 +3,9 @@ import { needsTranslation } from "../../translator/index.js";
 import { createSSETransformStreamWithLogger, createPassthroughStreamWithLogger } from "../../utils/stream.js";
 import { pipeWithDisconnect } from "../../utils/streamHandler.js";
 import { PROVIDERS } from "../../config/providers.js";
-import { STREAM_STALL_TIMEOUT_MS } from "../../config/runtimeConfig.js";
+import { STREAM_STALL_TIMEOUT_MS, STREAM_FIRST_CHUNK_TIMEOUT_MS, SSE_HEARTBEAT_INTERVAL_MS } from "../../config/runtimeConfig.js";
 import { buildAbortedResponsesTerminalBytes, buildAbortedChatTerminalBytes } from "../../utils/responsesStreamHelpers.js";
+import { isMuseSparkModel } from "../../providers/models/helpers.js";
 import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
 import { saveRequestDetail } from "@/lib/usageDb.js";
 import { SSE_HEADERS_CORS as SSE_HEADERS } from "../../utils/sseConstants.js";
@@ -81,15 +82,30 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
 
   const transformStream = buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, customToolNames, model, connectionId, body, onStreamComplete, apiKey, credentials });
 
+  // Muse Spark (OpenCode Zen) streams can stay silent for minutes while
+  // reasoning and are the only target for the recovery work below: heartbeats,
+  // TTFT watchdog and mid-stream failures surfaced as retryable errors.
+  const museSpark = isMuseSparkModel(model);
+
   // Responses passthrough: synthesize response.failed + [DONE] if the stream aborts/stalls before a terminal event.
   // Chat (OpenAI/Claude): synthesize an error payload + transport error so
   // clients retry the turn instead of treating truncation as completion.
   const isResponsesPassthrough = sourceFormat === FORMATS.OPENAI_RESPONSES && targetFormat === FORMATS.OPENAI_RESPONSES;
   const onAbortTerminal = isResponsesPassthrough
     ? buildAbortedResponsesTerminalBytes
-    : () => buildAbortedChatTerminalBytes(sourceFormat);
+    : (museSpark ? () => buildAbortedChatTerminalBytes(sourceFormat) : null);
   const stallTimeoutMs = PROVIDERS[provider]?.stallTimeoutMs || STREAM_STALL_TIMEOUT_MS;
-  const transformedBody = pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal, stallTimeoutMs);
+  // Responses passthrough keeps its graceful response.failed + [DONE] close
+  // (codex/droid contract) even for Muse Spark; chat streams surface mid-stream
+  // failures as transport errors so clients retry.
+  const streamRecovery = museSpark
+    ? {
+      heartbeatMs: SSE_HEARTBEAT_INTERVAL_MS,
+      firstChunkTimeoutMs: STREAM_FIRST_CHUNK_TIMEOUT_MS,
+      surfaceMidStreamErrors: !isResponsesPassthrough,
+    }
+    : {};
+  const transformedBody = pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal, stallTimeoutMs, streamRecovery);
 
   saveRequestDetail(buildRequestDetail({
     provider, model, connectionId,
@@ -105,9 +121,15 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
     console.error("[RequestDetail] Failed to save streaming request:", err.message);
   });
 
+  // Middlebox buffering hints are scoped to Muse Spark streams (long silent
+  // reasoning/tool_use gaps); other responses keep the standard SSE headers.
+  const responseHeaders = museSpark
+    ? { ...SSE_HEADERS, "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" }
+    : SSE_HEADERS;
+
   return {
     success: true,
-    response: new Response(transformedBody, { headers: SSE_HEADERS })
+    response: new Response(transformedBody, { headers: responseHeaders })
   };
 }
 
