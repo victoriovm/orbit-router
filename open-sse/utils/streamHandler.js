@@ -1,6 +1,9 @@
 // Stream handler with disconnect detection - shared for all providers
-import { STREAM_STALL_TIMEOUT_MS } from "../config/runtimeConfig.js";
+import { STREAM_STALL_TIMEOUT_MS, STREAM_FIRST_CHUNK_TIMEOUT_MS, SSE_HEARTBEAT_INTERVAL_MS } from "../config/runtimeConfig.js";
+import { SSE_HEARTBEAT } from "./sseConstants.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
+
+const heartbeatBytes = new TextEncoder().encode(SSE_HEARTBEAT);
 
 // Get HH:MM:SS timestamp
 function getTimeString() {
@@ -96,10 +99,13 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
  * for long periods while raw bytes still flow (e.g. Kiro EventStream
  * binary frames buffering, Claude reasoning streams).
  */
-export function createDisconnectAwareStream(transformStream, streamController, onAbortTerminal = null) {
+export function createDisconnectAwareStream(transformStream, streamController, onAbortTerminal = null, options = {}) {
   const reader = transformStream.readable.getReader();
   const writer = transformStream.writable.getWriter();
+  const heartbeatMs = options.heartbeatMs ?? SSE_HEARTBEAT_INTERVAL_MS;
   let terminalEmitted = false;
+  let pendingRead = null;
+  let heartbeatTimer = null;
 
   // Emit a synthesized terminal payload (e.g. Responses response.failed + [DONE]) once
   const emitTerminal = (controller) => {
@@ -111,29 +117,80 @@ export function createDisconnectAwareStream(transformStream, streamController, o
     } catch { /* best-effort terminal */ }
   };
 
+  // Shared terminal path for pulls that find the controller already finished:
+  // client disconnects close quietly, while upstream failures (stalls, logged
+  // errors) surface a transport error so clients retry. Responses terminals
+  // explicitly opt out (terminalIsError=false) to preserve the graceful-close
+  // contract codex/droid CLIs rely on. Plain controllers without pipe metadata
+  // (unit stubs) keep the legacy close behavior.
+  const finishDownstream = (controller) => {
+    emitTerminal(controller);
+    const graceful = onAbortTerminal?.terminalIsError === false;
+    const hasPipeInfo = typeof streamController.isStalled === "function";
+    const clientGone = streamController.isClientGone?.() === true;
+    const stalled = streamController.isStalled?.() === true;
+    if (graceful || clientGone || !hasPipeInfo) {
+      controller.close();
+    } else if (stalled) {
+      try {
+        controller.error(streamController.stallError?.() || new Error("stream stall timeout"));
+      } catch { /* already closed or cancelled */ }
+    } else {
+      try {
+        controller.error(streamController.lastError?.() || new Error("stream disconnected"));
+      } catch { /* already closed or cancelled */ }
+    }
+  };
+
+  const clearHeartbeat = () => {
+    if (heartbeatTimer) { clearTimeout(heartbeatTimer); heartbeatTimer = null; }
+  };
+
   return new ReadableStream({
     async pull(controller) {
       if (!streamController.isConnected()) {
         // Stall watchdog marks the controller disconnected before aborting the
         // fetch, so a plain isConnected check would turn stalls into clean EOF.
-        // Stalls are mid-stream failures: emit the error terminal (if any) and
-        // surface a transport error — unless the terminal explicitly opts out
-        // (Responses response.failed + [DONE] keeps graceful close for codex).
-        emitTerminal(controller);
-        const graceful = onAbortTerminal?.terminalIsError === false;
-        const stalled = streamController.isStalled?.() === true;
-        if (!graceful && stalled) {
-          try {
-            controller.error(streamController.stallError?.() || new Error("stream stall timeout"));
-          } catch { /* already closed or cancelled */ }
-        } else {
-          controller.close();
-        }
+        finishDownstream(controller);
         return;
       }
 
       try {
-        const { done, value } = await reader.read();
+        // Keep a single pending upstream read across pulls so heartbeat waits
+        // never drop data: the race below only decides whether to emit a
+        // `: ping` comment while upstream reasoning stays silent.
+        if (!pendingRead) pendingRead = reader.read();
+        const result = heartbeatMs > 0
+          ? await Promise.race([
+            pendingRead.then(
+              (r) => ({ kind: "data", ...r }),
+              (e) => ({ kind: "error", error: e }),
+            ),
+            new Promise((resolve) => {
+              heartbeatTimer = setTimeout(() => resolve({ kind: "heartbeat" }), heartbeatMs);
+            }),
+          ])
+          : await pendingRead.then(
+            (r) => ({ kind: "data", ...r }),
+            (e) => ({ kind: "error", error: e }),
+          );
+        clearHeartbeat();
+
+        if (result.kind === "heartbeat") {
+          // Upstream silent for heartbeatMs — keep middleboxes (nginx/CF/NAT)
+          // from killing the idle downstream without touching pendingRead.
+          heartbeatTimer = null;
+          if (!streamController.isConnected()) {
+            finishDownstream(controller);
+            return;
+          }
+          controller.enqueue(heartbeatBytes);
+          return;
+        }
+        pendingRead = null;
+
+        if (result.kind === "error") throw result.error;
+        const { done, value } = result;
 
         if (done) {
           streamController.handleComplete();
@@ -149,6 +206,8 @@ export function createDisconnectAwareStream(transformStream, streamController, o
         if (!isControllerClosed) streamController.handleError(error);
         reader.cancel().catch(() => {});
         writer.abort().catch(() => {});
+        pendingRead = null;
+        clearHeartbeat();
 
         // Treat network resets / socket hang up / abort as graceful close
         const msg = error?.message || "";
@@ -191,6 +250,8 @@ export function createDisconnectAwareStream(transformStream, streamController, o
     },
 
     cancel(reason) {
+      pendingRead = null;
+      clearHeartbeat();
       streamController.handleDisconnect(reason || "cancelled");
       reader.cancel();
       writer.abort();
@@ -209,32 +270,49 @@ export function createDisconnectAwareStream(transformStream, streamController, o
  *
  * Any upstream chunk resets the timer. If no bytes arrive for
  * STREAM_STALL_TIMEOUT_MS, abort the underlying fetch via the controller.
+ * A separate time-to-first-byte timer (STREAM_FIRST_CHUNK_TIMEOUT_MS) catches
+ * hangs during prompt prefill, where the stall timer alone would wait the full
+ * inter-chunk budget before noticing nothing ever arrived.
  *
  * @param {Response} providerResponse - Response from provider
  * @param {TransformStream} transformStream - Transform stream for SSE
  * @param {object} streamController - Stream controller from createStreamController
+ * @param {function} [onAbortTerminal] - Synthesized terminal payload builder
+ * @param {number} [stallTimeoutMs] - Inter-chunk stall budget
+ * @param {number} [heartbeatMs] - Downstream `: ping` interval while silent
+ * @param {number} [firstChunkTimeoutMs] - Time-to-first-byte budget
  */
-export function pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal = null, stallTimeoutMs = STREAM_STALL_TIMEOUT_MS) {
+export function pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal = null, stallTimeoutMs = STREAM_STALL_TIMEOUT_MS, heartbeatMs = SSE_HEARTBEAT_INTERVAL_MS, firstChunkTimeoutMs = STREAM_FIRST_CHUNK_TIMEOUT_MS) {
   let stallTimer = null;
+  let firstChunkTimer = null;
   let chunkCount = 0;
   let totalBytes = 0;
   let lastChunkAt = Date.now();
   let stallFired = false;
   let stallError = null;
+  let clientGone = false;
+  let lastError = null;
   const t0 = Date.now();
   const tag = "STREAM";
   const clearStall = () => {
     if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
   };
+  const clearFirstChunk = () => {
+    if (firstChunkTimer) { clearTimeout(firstChunkTimer); firstChunkTimer = null; }
+  };
+  const fireTimeout = (kind, budgetMs) => {
+    stallFired = true;
+    stallError = new Error(kind === "ttft" ? "stream first-chunk timeout (ttft)" : "stream stall timeout");
+    dbg(tag, `TIMEOUT ${kind}=${budgetMs}ms | chunks=${chunkCount} | bytes=${totalBytes} | sinceLast=${Date.now() - lastChunkAt}ms`);
+    streamController.handleError?.(stallError);
+    streamController.abort?.(stallError);
+  };
   const armStall = () => {
     clearStall();
     stallTimer = setTimeout(() => {
       stallTimer = null;
-      stallFired = true;
-      stallError = new Error("stream stall timeout");
-      dbg(tag, `STALL TIMEOUT ${stallTimeoutMs}ms | chunks=${chunkCount} | bytes=${totalBytes} | sinceLast=${Date.now() - lastChunkAt}ms`);
-      streamController.handleError?.(stallError);
-      streamController.abort?.(stallError);
+      clearFirstChunk();
+      fireTimeout("stall", stallTimeoutMs);
     }, stallTimeoutMs);
   };
 
@@ -247,14 +325,23 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
     isConnected: () => streamController.isConnected(),
     isStalled: () => stallFired,
     stallError: () => stallError,
-    handleComplete: () => { dbg(tag, `complete | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleComplete(); },
-    handleError: (e) => { dbg(tag, `error: ${e?.message} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleError(e); },
-    handleDisconnect: (r) => { dbg(tag, `disconnect: ${r} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleDisconnect(r); },
-    abort: (reason) => { clearStall(); streamController.abort(reason); }
+    isClientGone: () => clientGone,
+    lastError: () => lastError,
+    handleComplete: () => { dbg(tag, `complete | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); clearFirstChunk(); streamController.handleComplete(); },
+    handleError: (e) => { dbg(tag, `error: ${e?.message} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); lastError = e; clearStall(); clearFirstChunk(); streamController.handleError(e); },
+    handleDisconnect: (r) => { dbg(tag, `disconnect: ${r} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clientGone = true; clearStall(); clearFirstChunk(); streamController.handleDisconnect(r); },
+    abort: (reason) => { clearStall(); clearFirstChunk(); streamController.abort(reason); }
   };
 
   armStall();
-  dbg(tag, `pipe start | stallTimeout=${stallTimeoutMs}ms`);
+  firstChunkTimer = setTimeout(() => {
+    firstChunkTimer = null;
+    if (chunkCount === 0) {
+      clearStall();
+      fireTimeout("ttft", firstChunkTimeoutMs);
+    }
+  }, firstChunkTimeoutMs);
+  dbg(tag, `pipe start | stallTimeout=${stallTimeoutMs}ms | ttftTimeout=${firstChunkTimeoutMs}ms | heartbeat=${heartbeatMs}ms`);
 
   const upstreamTap = new TransformStream({
     transform(chunk, controller) {
@@ -267,10 +354,11 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
       if (isDebugEnabled && (chunkCount <= 5 || chunkCount % 20 === 0 || gap > 5000)) {
         dbg(tag, `chunk #${chunkCount} | size=${sz}B | gap=${gap}ms | total=${totalBytes}B`);
       }
+      if (chunkCount === 1) clearFirstChunk();
       armStall();
       controller.enqueue(chunk);
     },
-    flush() { dbg(tag, `upstream EOF | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); }
+    flush() { dbg(tag, `upstream EOF | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); clearFirstChunk(); }
   });
 
   const transformedBody = providerResponse.body
@@ -280,7 +368,8 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
   return createDisconnectAwareStream(
     { readable: transformedBody, writable: { getWriter: () => ({ abort: () => Promise.resolve() }) } },
     wrappedController,
-    onAbortTerminal
+    onAbortTerminal,
+    { heartbeatMs }
   );
 }
 

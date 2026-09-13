@@ -55,6 +55,12 @@ export const STREAM_STALL_TIMEOUT_MS = envMs("STREAM_STALL_TIMEOUT_MS", 360 * 10
 // Time-to-first-token timeout (prompt prefill). Env: STREAM_FIRST_CHUNK_TIMEOUT_MS.
 export const STREAM_FIRST_CHUNK_TIMEOUT_MS = envMs("STREAM_FIRST_CHUNK_TIMEOUT_MS", 200 * 1000);
 
+// SSE heartbeat interval: comment ping sent while upstream is silent so
+// nginx/Cloudflare don't kill idle downstream connections (Muse thinking
+// and tool_use deltas can gap longer than middlebox idle timeouts).
+// Env: SSE_HEARTBEAT_INTERVAL_MS.
+export const SSE_HEARTBEAT_INTERVAL_MS = envMs("SSE_HEARTBEAT_INTERVAL_MS", 15 * 1000);
+
 // Fetch connect timeout: abort if upstream doesn't return response headers within this duration
 export const FETCH_CONNECT_TIMEOUT_MS = envMs("FETCH_CONNECT_TIMEOUT_MS", 60 * 1000);
 
