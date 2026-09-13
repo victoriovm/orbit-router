@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { getSettings, validateApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
-import { verifyDashboardAuthToken } from "@/lib/auth/dashboardSession";
+import {
+  getDashboardAuthSession,
+  refreshDashboardSessionIfStale,
+  verifyDashboardAuthToken,
+} from "@/lib/auth/dashboardSession";
 import { hasTrustedPeerHeaders } from "@/lib/auth/trustedPeer";
 
 const CLI_TOKEN_HEADER = "x-9r-cli-token";
@@ -270,14 +274,23 @@ export async function proxy(request) {
     // If login not required, allow through
     if (!requireLogin) return NextResponse.next();
 
-    // Verify JWT token
+    // Sessão com token válido passa direto. O token é reemitido (rolling) a
+    // cada 24h de uso, então a sessão não expira enquanto o painel for usado:
+    // o usuário só sai ao clicar em logout (ou após 30 dias sem uso).
     const token = request.cookies.get("auth_token")?.value;
-    if (token) {
-      if (await verifyDashboardAuthToken(token)) {
-        return NextResponse.next();
-      } else {
-        return NextResponse.redirect(new URL("/login", request.url));
+    if (!token) {
+      return NextResponse.redirect(new URL("/login", request.url));
+    }
+    if (await verifyDashboardAuthToken(token)) {
+      const response = NextResponse.next();
+      // Best-effort: falha na renovação nunca bloqueia uma sessão válida.
+      try {
+        const session = await getDashboardAuthSession(token);
+        await refreshDashboardSessionIfStale(response, request, session);
+      } catch {
+        // Mantém a resposta original com a sessão válida.
       }
+      return response;
     }
 
     return NextResponse.redirect(new URL("/login", request.url));
