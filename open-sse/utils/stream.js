@@ -4,6 +4,7 @@ import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
 import { extractUsage, mergeUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./streamHelpers.js";
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
+import { isMuseSparkModel } from "../providers/models/helpers.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
 
 import { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER } from "./sseConstants.js";
@@ -500,6 +501,18 @@ export function createSSEStream(options = {}) {
           reqLogger?.appendConvertedChunk?.(doneOutput);
           controller.enqueue(sharedEncoder.encode(doneOutput));
           openAIResponsesDoneSent = true;
+          streamDoneSent = true;
+        }
+
+        // Muse Spark over the Responses API carries no [DONE] sentinel to forward
+        // and the transform loop drops upstream sentinels, so OpenAI-compatible
+        // clients (opencode AI-SDK) hang until timeout on a stream that already
+        // delivered finish_reason. Scoped to Muse Spark; other providers and
+        // client formats keep their existing terminators.
+        if (!streamDoneSent && sourceFormat === FORMATS.OPENAI && isMuseSparkModel(model)) {
+          const doneOutput = "data: [DONE]\n\n";
+          reqLogger?.appendConvertedChunk?.(doneOutput);
+          controller.enqueue(sharedEncoder.encode(doneOutput));
           streamDoneSent = true;
         }
 

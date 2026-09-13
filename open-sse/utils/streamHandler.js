@@ -1,6 +1,9 @@
 // Stream handler with disconnect detection - shared for all providers
 import { STREAM_STALL_TIMEOUT_MS } from "../config/runtimeConfig.js";
+import { SSE_HEARTBEAT } from "./sseConstants.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
+
+const heartbeatBytes = new TextEncoder().encode(SSE_HEARTBEAT);
 
 // Get HH:MM:SS timestamp
 function getTimeString() {
@@ -83,7 +86,7 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
       onError?.(error);
     },
 
-    abort: () => abortController.abort()
+    abort: (reason) => abortController.abort(reason)
   };
 }
 
@@ -96,10 +99,16 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
  * for long periods while raw bytes still flow (e.g. Kiro EventStream
  * binary frames buffering, Claude reasoning streams).
  */
-export function createDisconnectAwareStream(transformStream, streamController, onAbortTerminal = null) {
+export function createDisconnectAwareStream(transformStream, streamController, onAbortTerminal = null, options = {}) {
   const reader = transformStream.readable.getReader();
   const writer = transformStream.writable.getWriter();
+  const heartbeatMs = options.heartbeatMs ?? 0;
+  // Muse Spark requests opt in to surfacing mid-stream failures as transport
+  // errors; everything else keeps the legacy graceful-close contract.
+  const surfaceErrors = options.surfaceMidStreamErrors === true;
   let terminalEmitted = false;
+  let pendingRead = null;
+  let heartbeatTimer = null;
 
   // Emit a synthesized terminal payload (e.g. Responses response.failed + [DONE]) once
   const emitTerminal = (controller) => {
@@ -111,16 +120,82 @@ export function createDisconnectAwareStream(transformStream, streamController, o
     } catch { /* best-effort terminal */ }
   };
 
+  // Shared terminal path for pulls that find the controller already finished.
+  // Muse Spark (surfaceErrors): client disconnects close quietly, upstream
+  // failures (stalls, logged errors) surface a transport error so clients
+  // retry. Everyone else keeps the legacy emit-terminal + graceful close.
+  // Plain controllers without pipe metadata (unit stubs) also close.
+  const finishDownstream = (controller) => {
+    emitTerminal(controller);
+    const hasPipeInfo = typeof streamController.isStalled === "function";
+    if (!surfaceErrors || !hasPipeInfo) {
+      controller.close();
+      return;
+    }
+    const clientGone = streamController.isClientGone?.() === true;
+    const stalled = streamController.isStalled?.() === true;
+    if (clientGone) {
+      controller.close();
+    } else if (stalled) {
+      try {
+        controller.error(streamController.stallError?.() || new Error("stream stall timeout"));
+      } catch { /* already closed or cancelled */ }
+    } else {
+      try {
+        controller.error(streamController.lastError?.() || new Error("stream disconnected"));
+      } catch { /* already closed or cancelled */ }
+    }
+  };
+
+  const clearHeartbeat = () => {
+    if (heartbeatTimer) { clearTimeout(heartbeatTimer); heartbeatTimer = null; }
+  };
+
   return new ReadableStream({
     async pull(controller) {
       if (!streamController.isConnected()) {
-        emitTerminal(controller);
-        controller.close();
+        // Stall watchdog marks the controller disconnected before aborting the
+        // fetch, so a plain isConnected check would turn stalls into clean EOF.
+        finishDownstream(controller);
         return;
       }
 
       try {
-        const { done, value } = await reader.read();
+        // Keep a single pending upstream read across pulls so heartbeat waits
+        // never drop data: the race below only decides whether to emit a
+        // `: ping` comment while upstream reasoning stays silent.
+        if (!pendingRead) pendingRead = reader.read();
+        const result = heartbeatMs > 0
+          ? await Promise.race([
+            pendingRead.then(
+              (r) => ({ kind: "data", ...r }),
+              (e) => ({ kind: "error", error: e }),
+            ),
+            new Promise((resolve) => {
+              heartbeatTimer = setTimeout(() => resolve({ kind: "heartbeat" }), heartbeatMs);
+            }),
+          ])
+          : await pendingRead.then(
+            (r) => ({ kind: "data", ...r }),
+            (e) => ({ kind: "error", error: e }),
+          );
+        clearHeartbeat();
+
+        if (result.kind === "heartbeat") {
+          // Upstream silent for heartbeatMs — keep middleboxes (nginx/CF/NAT)
+          // from killing the idle downstream without touching pendingRead.
+          heartbeatTimer = null;
+          if (!streamController.isConnected()) {
+            finishDownstream(controller);
+            return;
+          }
+          controller.enqueue(heartbeatBytes);
+          return;
+        }
+        pendingRead = null;
+
+        if (result.kind === "error") throw result.error;
+        const { done, value } = result;
 
         if (done) {
           streamController.handleComplete();
@@ -136,6 +211,8 @@ export function createDisconnectAwareStream(transformStream, streamController, o
         if (!isControllerClosed) streamController.handleError(error);
         reader.cancel().catch(() => {});
         writer.abort().catch(() => {});
+        pendingRead = null;
+        clearHeartbeat();
 
         // Treat network resets / socket hang up / abort as graceful close
         const msg = error?.message || "";
@@ -151,14 +228,31 @@ export function createDisconnectAwareStream(transformStream, streamController, o
           code === "ETIMEDOUT" ||
           code === "EPIPE" ||
           code === "UND_ERR_SOCKET";
+        // Stall watchdog aborts the fetch after handleError already marked the
+        // controller disconnected — still a mid-stream failure, never a clean EOF.
+        // Prefer the explicit stall flag (abort reasons don't reliably propagate
+        // to the body-stream error message) with message sniffing as fallback.
+        const isStall = msg.includes("stall timeout") || streamController.isStalled?.() === true;
 
-        // Graceful close on network/abort, or when a structured terminal is available
-        // (Responses passthrough prefers response.failed + [DONE] over a raw transport error)
+        // Legacy path (every non-Muse-Spark request): network resets / aborts
+        // close quietly, and a structured terminal (Responses response.failed)
+        // still emits before closing.
+        // Muse Spark (surfaceErrors): the client being gone is the only quiet
+        // path; any other mid-stream upstream failure surfaces as a transport
+        // error (after the error terminal) so SDKs retry the truncated turn.
         try {
-          if (!wasConnected || isNetworkClose || onAbortTerminal) {
+          if (!surfaceErrors) {
+            if (!wasConnected || isNetworkClose || onAbortTerminal) {
+              emitTerminal(controller);
+              controller.close();
+            } else {
+              controller.error(error);
+            }
+          } else if (!wasConnected && !isStall) {
             emitTerminal(controller);
             controller.close();
           } else {
+            emitTerminal(controller);
             controller.error(error);
           }
         } catch (e) { /* already closed or cancelled */ }
@@ -166,6 +260,8 @@ export function createDisconnectAwareStream(transformStream, streamController, o
     },
 
     cancel(reason) {
+      pendingRead = null;
+      clearHeartbeat();
       streamController.handleDisconnect(reason || "cancelled");
       reader.cancel();
       writer.abort();
@@ -184,28 +280,54 @@ export function createDisconnectAwareStream(transformStream, streamController, o
  *
  * Any upstream chunk resets the timer. If no bytes arrive for
  * STREAM_STALL_TIMEOUT_MS, abort the underlying fetch via the controller.
+ * An optional time-to-first-byte timer catches hangs during prompt prefill,
+ * where the stall timer alone would wait the full inter-chunk budget before
+ * noticing nothing ever arrived.
  *
  * @param {Response} providerResponse - Response from provider
  * @param {TransformStream} transformStream - Transform stream for SSE
  * @param {object} streamController - Stream controller from createStreamController
+ * @param {function} [onAbortTerminal] - Synthesized terminal payload builder
+ * @param {number} [stallTimeoutMs] - Inter-chunk stall budget
+ * @param {object} [options]
+ * @param {number} [options.heartbeatMs] - Downstream `: ping` interval while silent (0 disables)
+ * @param {number} [options.firstChunkTimeoutMs] - Time-to-first-byte budget (0 disables)
+ * @param {boolean} [options.surfaceMidStreamErrors] - Emit transport errors for
+ *   mid-stream upstream failures instead of closing gracefully (Muse Spark)
  */
-export function pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal = null, stallTimeoutMs = STREAM_STALL_TIMEOUT_MS) {
+export function pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal = null, stallTimeoutMs = STREAM_STALL_TIMEOUT_MS, options = {}) {
+  const heartbeatMs = options.heartbeatMs ?? 0;
+  const firstChunkTimeoutMs = options.firstChunkTimeoutMs ?? 0;
   let stallTimer = null;
+  let firstChunkTimer = null;
   let chunkCount = 0;
   let totalBytes = 0;
   let lastChunkAt = Date.now();
+  let stallFired = false;
+  let stallError = null;
+  let clientGone = false;
+  let lastError = null;
   const t0 = Date.now();
   const tag = "STREAM";
   const clearStall = () => {
     if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
   };
+  const clearFirstChunk = () => {
+    if (firstChunkTimer) { clearTimeout(firstChunkTimer); firstChunkTimer = null; }
+  };
+  const fireTimeout = (kind, budgetMs) => {
+    stallFired = true;
+    stallError = new Error(kind === "ttft" ? "stream first-chunk timeout (ttft)" : "stream stall timeout");
+    dbg(tag, `TIMEOUT ${kind}=${budgetMs}ms | chunks=${chunkCount} | bytes=${totalBytes} | sinceLast=${Date.now() - lastChunkAt}ms`);
+    streamController.handleError?.(stallError);
+    streamController.abort?.(stallError);
+  };
   const armStall = () => {
     clearStall();
     stallTimer = setTimeout(() => {
       stallTimer = null;
-      dbg(tag, `STALL TIMEOUT ${stallTimeoutMs}ms | chunks=${chunkCount} | bytes=${totalBytes} | sinceLast=${Date.now() - lastChunkAt}ms`);
-      streamController.handleError?.(new Error("stream stall timeout"));
-      streamController.abort?.();
+      clearFirstChunk();
+      fireTimeout("stall", stallTimeoutMs);
     }, stallTimeoutMs);
   };
 
@@ -216,14 +338,27 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
     signal: streamController.signal,
     startTime: streamController.startTime,
     isConnected: () => streamController.isConnected(),
-    handleComplete: () => { dbg(tag, `complete | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleComplete(); },
-    handleError: (e) => { dbg(tag, `error: ${e?.message} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleError(e); },
-    handleDisconnect: (r) => { dbg(tag, `disconnect: ${r} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleDisconnect(r); },
-    abort: () => { clearStall(); streamController.abort(); }
+    isStalled: () => stallFired,
+    stallError: () => stallError,
+    isClientGone: () => clientGone,
+    lastError: () => lastError,
+    handleComplete: () => { dbg(tag, `complete | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); clearFirstChunk(); streamController.handleComplete(); },
+    handleError: (e) => { dbg(tag, `error: ${e?.message} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); lastError = e; clearStall(); clearFirstChunk(); streamController.handleError(e); },
+    handleDisconnect: (r) => { dbg(tag, `disconnect: ${r} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clientGone = true; clearStall(); clearFirstChunk(); streamController.handleDisconnect(r); },
+    abort: (reason) => { clearStall(); clearFirstChunk(); streamController.abort(reason); }
   };
 
   armStall();
-  dbg(tag, `pipe start | stallTimeout=${stallTimeoutMs}ms`);
+  if (firstChunkTimeoutMs > 0) {
+    firstChunkTimer = setTimeout(() => {
+      firstChunkTimer = null;
+      if (chunkCount === 0) {
+        clearStall();
+        fireTimeout("ttft", firstChunkTimeoutMs);
+      }
+    }, firstChunkTimeoutMs);
+  }
+  dbg(tag, `pipe start | stallTimeout=${stallTimeoutMs}ms | ttftTimeout=${firstChunkTimeoutMs}ms | heartbeat=${heartbeatMs}ms`);
 
   const upstreamTap = new TransformStream({
     transform(chunk, controller) {
@@ -236,10 +371,11 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
       if (isDebugEnabled && (chunkCount <= 5 || chunkCount % 20 === 0 || gap > 5000)) {
         dbg(tag, `chunk #${chunkCount} | size=${sz}B | gap=${gap}ms | total=${totalBytes}B`);
       }
+      if (chunkCount === 1) clearFirstChunk();
       armStall();
       controller.enqueue(chunk);
     },
-    flush() { dbg(tag, `upstream EOF | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); }
+    flush() { dbg(tag, `upstream EOF | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); clearFirstChunk(); }
   });
 
   const transformedBody = providerResponse.body
@@ -249,7 +385,8 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
   return createDisconnectAwareStream(
     { readable: transformedBody, writable: { getWriter: () => ({ abort: () => Promise.resolve() }) } },
     wrappedController,
-    onAbortTerminal
+    onAbortTerminal,
+    { heartbeatMs, surfaceMidStreamErrors: options.surfaceMidStreamErrors }
   );
 }
 

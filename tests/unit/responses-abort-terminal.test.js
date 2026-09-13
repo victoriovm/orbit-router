@@ -65,6 +65,8 @@ describe("Responses abort terminal synthesis", () => {
       null
     );
 
+    // Outside the Muse Spark scope there is no error terminal, so a network
+    // close keeps the legacy graceful close.
     const text = await readAll(out);
     expect(text).not.toContain("response.failed");
     expect(text).not.toContain("[DONE]");

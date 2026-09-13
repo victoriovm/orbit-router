@@ -74,6 +74,11 @@ http.createServer = (...args) => {
   };
   const server = origCreate(...rest, wrapped);
   server.once("listening", () => {
+    // Node's default requestTimeout (300s) kills long-lived SSE responses
+    // server-side. This is a server-level setting and cannot be scoped per
+    // model/provider, so disable it; it only relaxes a limit and does not
+    // change behavior for regular requests.
+    server.requestTimeout = 0;
     startBackgroundTokenRefreshFromCustomServer();
   });
   const origEmit = server.emit;

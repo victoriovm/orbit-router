@@ -48,3 +48,46 @@ export function formatIncompleteOpenAIResponsesStreamFailure() {
     }
   }, FORMATS.OPENAI_RESPONSES);
 }
+
+// --- Chat (OpenAI / Claude) abort terminals ---------------------------------
+// Same idea as response.failed above, but for chat SSE: synthesize an explicit
+// error payload when the upstream disconnects mid-stream (ECONNRESET, socket
+// hang up, stall) before any terminal chunk (finish_reason / message_stop).
+// Without this, clients (e.g. opencode SessionRetry) see a truncated stream
+// followed by [DONE] and assume the turn completed, so they never retry.
+// Only built for Muse Spark requests; the caller also enables
+// surfaceMidStreamErrors so a transport error follows the payload.
+const STREAM_DISCONNECTED_MESSAGE =
+  "stream closed before terminal chunk (upstream disconnect/stall)";
+
+function formatIncompleteOpenAIChatStreamFailure() {
+  return `data: ${JSON.stringify({
+    id: `chatcmpl-${Date.now().toString(36)}`,
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    choices: [{ index: 0, delta: {}, finish_reason: "error" }],
+    error: {
+      message: STREAM_DISCONNECTED_MESSAGE,
+      type: "server_error",
+      code: "stream_disconnected",
+    },
+  })}\n\n`;
+}
+
+function formatIncompleteClaudeStreamFailure() {
+  return `event: error\ndata: ${JSON.stringify({
+    type: "error",
+    error: { type: "api_error", message: STREAM_DISCONNECTED_MESSAGE },
+  })}\n\n`;
+}
+
+// Encoded chat error payload for aborted/stalled chat streams. Takes the
+// client sourceFormat so OpenAI clients get an OpenAI-shaped chunk and Claude
+// clients get the standard Anthropic error event.
+export function buildAbortedChatTerminalBytes(sourceFormat) {
+  const payload =
+    sourceFormat === FORMATS.CLAUDE
+      ? formatIncompleteClaudeStreamFailure()
+      : formatIncompleteOpenAIChatStreamFailure();
+  return sharedEncoder.encode(payload);
+}

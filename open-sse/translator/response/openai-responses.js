@@ -9,6 +9,7 @@ import { buildUsage } from "../concerns/usage.js";
 import { fallbackToolCallId } from "../concerns/toolCall.js";
 import { reasoningDelta, extractReasoningText } from "../concerns/reasoning.js";
 import { ROLE, OPENAI_BLOCK, RESPONSES_ITEM, OPENAI_FINISH, MODEL_FALLBACK } from "../schema/index.js";
+import { isMuseSparkModel } from "../../providers/models/helpers.js";
 
 /**
  * Translate OpenAI chunk to Responses API events
@@ -408,6 +409,37 @@ function computeFinishReason(state) {
     : OPENAI_FINISH.STOP;
 }
 
+// Build an OpenAI-compatible error terminal for failed upstream turns.
+// Uses the same shape as the mid-stream abort terminal (finish_reason "error"
+// + top-level error object) so clients treat it as a failure to retry,
+// never as normal assistant text ending the turn.
+// Muse Spark only — other models keep the legacy stop/[Error] mapping below.
+function failedCompletion(state, error) {
+  state.finishReasonSent = true;
+  state.finishReason = "error";
+
+  const message = (error && typeof error.message === "string" && error.message)
+    || (typeof error === "string" && error)
+    || "upstream response failed";
+
+  const failedChunk = buildChunk(
+    { id: state.chatId || `chatcmpl-${Date.now()}`, created: state.created || Math.floor(Date.now() / 1000), model: state.model || MODEL_FALLBACK },
+    {},
+    "error"
+  );
+  failedChunk.error = {
+    message: `upstream response failed: ${message}`,
+    type: "server_error",
+    code: "response_failed"
+  };
+
+  if (state.usage && typeof state.usage === "object") {
+    failedChunk.usage = state.usage;
+  }
+
+  return failedChunk;
+}
+
 /**
  * Translate OpenAI Responses API chunk to OpenAI Chat Completions format
  * This is for when Codex returns data and we need to send it to an OpenAI-compatible client
@@ -553,7 +585,17 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
     }
     
     if (!state.finishReasonSent) {
-      const finishReason = computeFinishReason(state);
+      const status = data.response?.status;
+      // Muse Spark only: a completed terminal is not always a clean stop.
+      // incomplete means the upstream truncated output (map to length, like
+      // OpenAI). failed means the turn did not complete — surface an error
+      // payload so OpenAI clients (opencode SessionRetry) retry instead of
+      // ending the turn on a fake stop. Other models keep computeFinishReason.
+      const museSpark = isMuseSparkModel(state.model);
+      if (museSpark && status === "failed") {
+        return failedCompletion(state, data.response?.error);
+      }
+      const finishReason = museSpark && status === "incomplete" ? OPENAI_FINISH.LENGTH : computeFinishReason(state);
 
       state.finishReasonSent = true;
       state.finishReason = finishReason; // Mark for usage injection in stream.js
@@ -581,10 +623,14 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
 
     const error = data.error || data.response?.error;
     if (error) {
+      // Muse Spark: surface as an error payload, not as fake "[Error] ..."
+      // assistant text with a clean stop — clients must see the failure to retry.
+      if (isMuseSparkModel(state.model)) {
+        return failedCompletion(state, error);
+      }
+      // Legacy mapping for every other model
       state.error = error;
       state.finishReasonSent = true;
-
-      // Surface the error as an OpenAI-compatible error chunk
       return buildChunk(
         { id: state.chatId || `chatcmpl-${Date.now()}`, created: state.created || Math.floor(Date.now() / 1000), model: state.model || MODEL_FALLBACK },
         { content: `[Error] ${error.message || JSON.stringify(error)}` },
