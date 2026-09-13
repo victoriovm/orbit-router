@@ -61,8 +61,9 @@ export const STREAM_FIRST_CHUNK_TIMEOUT_MS = envMs("STREAM_FIRST_CHUNK_TIMEOUT_M
 // Env: SSE_HEARTBEAT_INTERVAL_MS.
 export const SSE_HEARTBEAT_INTERVAL_MS = envMs("SSE_HEARTBEAT_INTERVAL_MS", 15 * 1000);
 
-// Fetch connect timeout: abort if upstream doesn't return response headers within this duration
-export const FETCH_CONNECT_TIMEOUT_MS = envMs("FETCH_CONNECT_TIMEOUT_MS", 60 * 1000);
+// Fetch connect timeout: abort if upstream doesn't return response headers within this duration.
+// Reasoning models (o1/o3/Muse Spark) with large contexts (300k+ tokens) can take >60s for TTFT under load.
+export const FETCH_CONNECT_TIMEOUT_MS = envMs("FETCH_CONNECT_TIMEOUT_MS", 120 * 1000);
 
 // Gemini native TTS fetch timeout: abort if Google does not return response headers in time.
 export const GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS = envMs("GEMINI_NATIVE_TTS_FETCH_TIMEOUT_MS", 45 * 1000);
