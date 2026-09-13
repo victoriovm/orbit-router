@@ -74,6 +74,13 @@ http.createServer = (...args) => {
   };
   const server = origCreate(...rest, wrapped);
   server.once("listening", () => {
+    // Long-lived SSE streams must survive slow reasoning gaps: keep sockets
+    // alive past typical reverse-proxy idle timeouts (nginx 60s) and never
+    // kill an in-flight request server-side (requestTimeout=0). headersTimeout
+    // must exceed keepAliveTimeout per Node requirements.
+    server.keepAliveTimeout = 65000;
+    server.headersTimeout = 70000;
+    server.requestTimeout = 0;
     startBackgroundTokenRefreshFromCustomServer();
   });
   const origEmit = server.emit;

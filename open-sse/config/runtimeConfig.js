@@ -82,11 +82,61 @@ export const RETRY_CONFIG = {
 // Default retry config by status code: { attempts, delayMs }
 // Backward compat: if value is a number, treated as attempts with RETRY_CONFIG.delayMs
 export const DEFAULT_RETRY_CONFIG = {
-  429: { attempts: 0, delayMs: 0 },
+  429: { attempts: 2, delayMs: 2000 },
   502: { attempts: 3, delayMs: 3000 },
   503: { attempts: 3, delayMs: 2000 },
   504: { attempts: 2, delayMs: 3000 }
 };
+
+// Cap for honoring upstream Retry-After delays: longer hints veto the retry
+// (caller falls back to the next URL/account instead of sleeping for minutes).
+// Env: MAX_RETRY_AFTER_MS.
+export const MAX_RETRY_AFTER_MS = envMs("MAX_RETRY_AFTER_MS", 10 * 1000);
+
+// Parse a retry delay hint from response headers (Headers instance or plain
+// object). Checks retry-after-ms, retry-after (seconds or HTTP date),
+// x-ratelimit-reset-after and x-ratelimit-reset (epoch seconds).
+// Returns milliseconds, or null when absent/invalid.
+export function parseRetryAfterMs(headers) {
+  if (!headers) return null;
+  const pick = (names) => {
+    for (const name of names) {
+      const value = typeof headers.get === "function"
+        ? headers.get(name)
+        : (headers[name] ?? headers[name.toLowerCase()]);
+      if (value != null && value !== "") return value;
+    }
+    return null;
+  };
+
+  const afterMs = pick(["retry-after-ms", "x-retry-after-ms"]);
+  if (afterMs != null) {
+    const n = Number.parseFloat(afterMs);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+
+  const after = pick(["retry-after", "x-ratelimit-reset-after"]);
+  if (after != null) {
+    const seconds = Number.parseFloat(after);
+    if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
+    const at = Date.parse(after);
+    if (!Number.isNaN(at)) {
+      const diff = at - Date.now();
+      if (diff > 0) return diff;
+    }
+  }
+
+  const resetEpoch = pick(["x-ratelimit-reset"]);
+  if (resetEpoch != null) {
+    const at = Number.parseFloat(resetEpoch) * 1000;
+    if (Number.isFinite(at)) {
+      const diff = at - Date.now();
+      if (diff > 0) return diff;
+    }
+  }
+
+  return null;
+}
 
 // Normalize a retry entry to { attempts, delayMs }
 export function resolveRetryEntry(entry) {

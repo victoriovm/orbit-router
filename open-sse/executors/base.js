@@ -1,4 +1,4 @@
-import { HTTP_STATUS, RETRY_CONFIG, DEFAULT_RETRY_CONFIG, resolveRetryEntry, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
+import { HTTP_STATUS, RETRY_CONFIG, DEFAULT_RETRY_CONFIG, MAX_RETRY_AFTER_MS, parseRetryAfterMs, resolveRetryEntry, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { shouldRefreshCredentials } from "../services/oauthCredentialManager.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { dbg } from "../utils/debugLog.js";
@@ -87,6 +87,17 @@ export class BaseExecutor {
   // Override in subclass for provider-specific refresh
   async refreshCredentials(credentials, log, proxyOptions = null) {
     return null;
+  }
+
+  // Default hook for tryRetry: honor upstream Retry-After hints (capped at
+  // MAX_RETRY_AFTER_MS), else return null to keep the configured static
+  // delayMs. Returns false to veto the retry when the hint exceeds the cap
+  // (caller falls back to the next URL/account instead of sleeping).
+  // Subclasses (e.g. antigravity) override this for provider-specific parsing.
+  async computeRetryDelay(response, attempt, delayMs) {
+    const retryMs = parseRetryAfterMs(response?.headers);
+    if (retryMs == null) return null;
+    return retryMs <= MAX_RETRY_AFTER_MS ? retryMs : false;
   }
 
   needsRefresh(credentials) {
