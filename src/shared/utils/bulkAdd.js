@@ -20,11 +20,11 @@
 /**
  * Parse one pipe-separated bulk line into { baseName, apiKey, providerSpecificData? }.
  * @param {string} line
- * @param {{isCloudflareAi?: boolean}} [opts]
+ * @param {{isCloudflareAi?: boolean, isModal?: boolean}} [opts]
  * @returns {{baseName: string, apiKey: string, providerSpecificData?: object}|null}
  */
 function parseLine(line, opts = {}) {
-  const { isCloudflareAi = false } = opts;
+  const { isCloudflareAi = false, isModal = false } = opts;
   const parts = line.split("|");
 
   if (isCloudflareAi && parts.length >= 3) {
@@ -36,6 +36,18 @@ function parseLine(line, opts = {}) {
       baseName: baseName || "Key",
       apiKey,
       providerSpecificData: { accountId },
+    };
+  }
+
+  if (isModal && parts.length >= 3) {
+    // name|apiKey|url1,url2 — Modal endpoints, comma or space separated
+    const baseName = parts[0].trim();
+    const apiKey = parts[1].trim();
+    const baseUrls = parts.slice(2).join(",").split(/[\n,]/).map((u) => u.trim()).filter(Boolean);
+    return {
+      baseName: baseName || "Key",
+      apiKey,
+      ...(baseUrls.length ? { providerSpecificData: { baseUrls } } : {}),
     };
   }
 
@@ -56,11 +68,11 @@ function parseLine(line, opts = {}) {
  *
  * @param {string[]} lines raw paste lines
  * @param {string[]|null|undefined} existingNames connection names already saved
- * @param {{isCloudflareAi?: boolean}} [opts]
+ * @param {{isCloudflareAi?: boolean, isModal?: boolean}} [opts]
  * @returns {{name: string, apiKey: string, skipped: boolean, providerSpecificData?: object}[]}
  */
 export function planBulkAdd(lines, existingNames, opts = {}) {
-  const { isCloudflareAi = false } = opts;
+  const { isCloudflareAi = false, isModal = false } = opts;
 
   const safeExisting = Array.isArray(existingNames) ? existingNames : [];
   const used = new Set(safeExisting.map((n) => (typeof n === "string" ? n.toLowerCase() : "")));
@@ -70,7 +82,7 @@ export function planBulkAdd(lines, existingNames, opts = {}) {
     const line = typeof raw === "string" ? raw.trim() : "";
     if (!line) continue;
 
-    const parsed = parseLine(line, { isCloudflareAi });
+    const parsed = parseLine(line, { isCloudflareAi, isModal });
     if (!parsed || !parsed.apiKey) continue;
 
     const base = parsed.baseName;

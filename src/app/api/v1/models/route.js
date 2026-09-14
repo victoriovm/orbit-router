@@ -15,6 +15,8 @@ import { resolveClinepassModels, resolveClineModels } from "open-sse/services/cl
 import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
 import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
+import { discoverModalModels, listModalBaseUrls } from "open-sse/services/modalModels.js";
+import { updateProviderConnection } from "@/lib/localDb";
 import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
@@ -141,7 +143,45 @@ const LIVE_MODEL_RESOLVERS = {
         })),
     };
   },
+  // Modal models live on per-app endpoints, i.e. only knowable per connection.
+  modal: async (conn) => {
+    const models = await resolveModalLiveModels(conn);
+    return models ? { models } : null;
+  },
 };
+
+// Live Modal catalogs cost one HTTP request per endpoint, so cache them
+// briefly — model pickers poll /v1/models and shouldn't re-probe every time.
+const MODAL_LIVE_TTL_MS = 60_000;
+const modalLiveCache = new Map();
+
+async function resolveModalLiveModels(conn) {
+  const urls = listModalBaseUrls(conn);
+  if (!urls.length) return null;
+
+  const cacheKey = `${conn.id}|${urls.join(",")}`;
+  const cached = modalLiveCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < MODAL_LIVE_TTL_MS) return cached.models;
+
+  try {
+const { models } = await discoverModalModels(conn, {
+        timeoutMs: 2500,
+        // Persist the discovered routes so chat routing follows discovery.
+        persist: (routes) => updateProviderConnection(conn.id, {
+          providerSpecificData: {
+            ...(conn.providerSpecificData || {}),
+            ...routes,
+          },
+        }),
+      });
+    if (!models.length) return null;
+    modalLiveCache.set(cacheKey, { at: Date.now(), models });
+    return models;
+  } catch (err) {
+    console.log(`Live model fetch failed for modal: ${err?.message || err}`);
+    return null;
+  }
+}
 
 const parseOpenAIStyleModels = (data) => {
   if (Array.isArray(data)) return data;

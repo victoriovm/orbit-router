@@ -8,6 +8,8 @@ import Button from "@/shared/components/Button";
 import Badge from "@/shared/components/Badge";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
 import Select from "@/shared/components/Select";
+import EndpointUrlsInput from "@/shared/components/EndpointUrlsInput";
+import { parseModalBaseUrls } from "open-sse/services/modalModels.js";
 
 export default function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }) {
   const [formData, setFormData] = useState({
@@ -22,6 +24,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
     organization: "",
   });
   const [cloudflareData, setCloudflareData] = useState({ accountId: "" });
+  const [modalUrls, setModalUrls] = useState([""]);
   const [region, setRegion] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -48,6 +51,13 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
       if (connection.provider === "cloudflare-ai" && connection.providerSpecificData) {
         setCloudflareData({ accountId: connection.providerSpecificData.accountId || "" });
       }
+      if (connection.provider === "modal") {
+        const psd = connection.providerSpecificData || {};
+        const urls = Array.isArray(psd.baseUrls) && psd.baseUrls.length
+          ? psd.baseUrls
+          : (psd.baseUrl ? [psd.baseUrl] : []);
+        setModalUrls(urls.length ? urls : [""]);
+      }
       // Load region for providers that support it (e.g. xiaomi-tokenplan)
       const providerCfg = AI_PROVIDERS?.[connection.provider];
       if (providerCfg?.regions) {
@@ -62,6 +72,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   const isOAuth = connection?.authType === "oauth";
   const isAzure = connection?.provider === "azure";
   const isCloudflareAi = connection?.provider === "cloudflare-ai";
+  const isModal = connection?.provider === "modal";
   const isCompatible = connection
     ? (isOpenAICompatibleProvider(connection.provider) || isAnthropicCompatibleProvider(connection.provider))
     : false;
@@ -72,6 +83,10 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
     if (providerRegions && region) return { ...((connection?.providerSpecificData) || {}), region };
     return undefined;
   };
+
+  const buildModalSpecificData = () => (
+    isModal ? { baseUrls: parseModalBaseUrls(modalUrls) } : undefined
+  );
 
   const handleTest = async () => {
     if (!connection?.provider) return;
@@ -101,6 +116,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
           apiKey: formData.apiKey,
           ...(isAzure ? { providerSpecificData: azureData } : {}),
           ...(isCloudflareAi ? { providerSpecificData: cloudflareData } : {}),
+          ...(isModal ? { providerSpecificData: buildModalSpecificData() } : {}),
           ...(providerRegions ? { providerSpecificData: buildRegionSpecificData() } : {}),
         }),
       });
@@ -115,6 +131,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
 
   const handleSubmit = async () => {
     if (!connection) return;
+    if (isModal && parseModalBaseUrls(modalUrls).length === 0) return;
     setSaving(true);
     try {
       const updates = {
@@ -136,6 +153,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
                 apiKey: formData.apiKey,
                 ...(isAzure ? { providerSpecificData: azureData } : {}),
                 ...(isCloudflareAi ? { providerSpecificData: cloudflareData } : {}),
+                ...(isModal ? { providerSpecificData: buildModalSpecificData() } : {}),
                 ...(providerRegions ? { providerSpecificData: buildRegionSpecificData() } : {}),
               }),
             });
@@ -166,6 +184,9 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
       }
       if (isCloudflareAi) {
         updates.providerSpecificData = { accountId: cloudflareData.accountId };
+      }
+      if (isModal) {
+        updates.providerSpecificData = buildModalSpecificData();
       }
       // Persist updated region for region-aware providers
       if (providerRegions && region) {
@@ -264,6 +285,15 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
           </div>
         )}
 
+        {isModal && (
+          <EndpointUrlsInput
+            values={modalUrls}
+            onChange={setModalUrls}
+            placeholder="https://your-workspace--your-app.us-west.modal.direct/v1"
+            error={parseModalBaseUrls(modalUrls).length === 0 ? "At least one endpoint URL is required." : null}
+            hint={<>One token works across every endpoint. Run {`"Discover Models"`} after changing URLs to refresh the model → endpoint map.</>}
+          />
+        )}
         {providerRegions && (
           <Select
             label="Region"
@@ -287,7 +317,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
         )}
 
         <div className="flex gap-2">
-          <Button onClick={handleSubmit} fullWidth disabled={saving}>{saving ? "Saving..." : "Save"}</Button>
+          <Button onClick={handleSubmit} fullWidth disabled={saving || (isModal && parseModalBaseUrls(modalUrls).length === 0)}>{saving ? "Saving..." : "Save"}</Button>
           <Button onClick={onClose} variant="ghost" fullWidth>Cancel</Button>
         </div>
       </div>

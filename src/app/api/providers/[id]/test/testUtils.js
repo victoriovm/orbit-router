@@ -4,6 +4,7 @@ import { testProxyUrl } from "@/lib/network/proxyTest";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { resolveOllamaLocalHost, PROVIDERS } from "open-sse/config/providers.js";
+import { listModalBaseUrls, normalizeModalToken } from "open-sse/services/modalModels.js";
 import { CODEX_CLI_VERSION } from "open-sse/config/appConstants.js";
 import {
   refreshProviderCredentials,
@@ -823,6 +824,36 @@ case "llm7": {
           },
         }, effectiveProxy);
         return { valid: res.ok, error: res.ok ? null : "Invalid API key", refreshed: false };
+      }
+      case "modal": {
+        // One token, many per-app endpoints: reject only on an explicit 401/403,
+        // otherwise a single reachable endpoint proves the credentials.
+        const modalUrls = listModalBaseUrls(connection);
+        if (!modalUrls.length) return { valid: false, error: "Missing endpoint URL" };
+        // Tolerate a token pasted with its header prefix ("Authorization: Bearer …").
+        const modalToken = normalizeModalToken(connection.apiKey);
+        const probes = await Promise.all(modalUrls.map(async (base) => {
+          try {
+            const res = await fetchWithConnectionProxy(`${base}/models`, {
+              headers: { Authorization: `Bearer ${modalToken}` },
+            }, effectiveProxy);
+            if (res.status === 401 || res.status === 403) return { base, authFailed: true };
+            return { base, ok: res.ok, status: res.status };
+          } catch (err) {
+            return { base, error: err.message };
+          }
+        }));
+        const authFailed = probes.some((probe) => probe.authFailed);
+        const reachable = probes.filter((probe) => probe.ok);
+        const modalValid = reachable.length > 0 && !authFailed;
+        return {
+          valid: modalValid,
+          error: modalValid
+            ? null
+            : authFailed
+              ? "Invalid API token"
+              : `No endpoint responded: ${probes.map((probe) => `${probe.base}: ${probe.error || `HTTP ${probe.status}`}`).join("; ")}`,
+        };
       }
       default:
         return { valid: false, error: "Provider test not supported" };

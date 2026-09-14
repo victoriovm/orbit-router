@@ -13,7 +13,11 @@ const OPTIONAL_FIELDS = [
 const MODEL_LOCK_PREFIX = "modelLock_";
 
 function resetHealthStateOnActivation(existing, patch) {
-  if (patch?.testStatus !== "active") return patch;
+  // Activation — a successful request/test or re-enabling the connection in the
+  // dashboard — is a fresh start: drop locks, error bookkeeping and the failure
+  // strikes that would otherwise disable it again on the next error.
+  const activating = patch?.testStatus === "active" || patch?.isActive === true;
+  if (!activating) return patch;
 
   const normalized = {
     ...patch,
@@ -23,6 +27,7 @@ function resetHealthStateOnActivation(existing, patch) {
     errorCode: null,
     rateLimitedUntil: null,
     backoffLevel: 0,
+    ...(Object.hasOwn(existing || {}, "failureStrikes") ? { failureStrikes: 0 } : {}),
   };
 
   for (const key of Object.keys(existing || {})) {

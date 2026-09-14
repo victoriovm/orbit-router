@@ -55,9 +55,14 @@ const COOLDOWN = {
  *   - status: HTTP status code match
  *   - cooldownMs: fixed cooldown duration
  *   - backoff: true = use exponential backoff (rate limit)
+ *   - noFallback: true = request error, not an account failure (no cooldown, no
+ *     fallback, no failure strike) — e.g. a model no endpoint of the account hosts
  */
 export const ERROR_RULES = [
   // --- Text-based rules (checked first, order = priority) ---
+  // The requested model simply isn't deployed on the account: switching accounts
+  // cannot help, and locking them would turn a client typo into an outage.
+  { text: "is not served by any configured endpoint", noFallback: true },
   { text: "no credentials",           cooldownMs: COOLDOWN.long },
   { text: "request not allowed",      cooldownMs: COOLDOWN.short },
   { text: "improperly formed request", cooldownMs: COOLDOWN.long },

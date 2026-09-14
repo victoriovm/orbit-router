@@ -15,6 +15,7 @@ import { GrokWebExecutor } from "./grok-web.js";
 import { GrokCliExecutor } from "./grok-cli.js";
 import { PerplexityWebExecutor } from "./perplexity-web.js";
 import { OllamaLocalExecutor } from "./ollama-local.js";
+import { ModalExecutor } from "./modal.js";
 import { CommandCodeExecutor } from "./commandcode.js";
 import { XiaomiTokenplanExecutor } from "./xiaomi-tokenplan.js";
 import { XiaomiMimoExecutor } from "./xiaomi-mimo.js";
@@ -49,6 +50,7 @@ const executors = {
   gb: new GrokCliExecutor(), // Alias (Grok Build)
   "perplexity-web": new PerplexityWebExecutor(),
   "ollama-local": new OllamaLocalExecutor(),
+  modal: new ModalExecutor(),
   commandcode: new CommandCodeExecutor(),
   "xiaomi-tokenplan": new XiaomiTokenplanExecutor(),
   "xiaomi-mimo": new XiaomiMimoExecutor(),
@@ -93,6 +95,7 @@ export { GrokWebExecutor } from "./grok-web.js";
 export { GrokCliExecutor } from "./grok-cli.js";
 export { PerplexityWebExecutor } from "./perplexity-web.js";
 export { OllamaLocalExecutor } from "./ollama-local.js";
+export { ModalExecutor } from "./modal.js";
 export { CommandCodeExecutor } from "./commandcode.js";
 export { XiaomiTokenplanExecutor } from "./xiaomi-tokenplan.js";
 export { XiaomiMimoExecutor } from "./xiaomi-mimo.js";

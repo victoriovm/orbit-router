@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getProviderConnectionById } from "@/models";
+import { getProviderConnectionById, updateProviderConnection } from "@/models";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { GEMINI_CONFIG } from "@/lib/oauth/constants/oauth";
 import { refreshGoogleToken, refreshCodexToken, updateProviderCredentials } from "@/sse/services/tokenRefresh";
@@ -12,6 +12,7 @@ import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveClineModels, resolveClinepassModels } from "open-sse/services/clinepassModels.js";
+import { discoverModalModels } from "open-sse/services/modalModels.js";
 
 const GEMINI_CLI_MODELS_URL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 
@@ -522,7 +523,36 @@ const PROVIDER_MODELS_CONFIG = {
       const data = await response.json();
       return { models: parseOpenAIStyleModels(data) };
     }
-  }
+  },
+
+  // Modal: one token spans every endpoint of the account. Merge /models from
+  // each configured base URL and persist the model → base URL map, which the
+  // executor uses to route each model to the endpoint that serves it.
+  modal: {
+    customResolver: async (connection) => {
+      const { models, errors } = await discoverModalModels(connection, {
+        persist: (routes) => updateProviderConnection(connection.id, {
+          providerSpecificData: {
+            ...(connection.providerSpecificData || {}),
+            ...routes,
+          },
+        }),
+      });
+      if (!models.length) {
+        return {
+          error: errors.length
+            ? `Failed to fetch models: ${errors.join("; ")}`
+            : "No models returned by the configured endpoints",
+          status: 502,
+        };
+      }
+
+      return {
+        models,
+        ...(errors.length ? { warning: `Some endpoints failed — ${errors.join("; ")}` } : {}),
+      };
+    },
+  },
 };
 
 /**

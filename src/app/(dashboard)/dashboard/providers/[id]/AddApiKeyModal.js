@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import PropTypes from "prop-types";
-import { Button, Badge, Input, Modal, Select } from "@/shared/components";
+import { Button, Badge, Input, Modal, Select, EndpointUrlsInput } from "@/shared/components";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { planBulkAdd } from "@/shared/utils/bulkAdd";
+import { parseModalBaseUrls } from "open-sse/services/modalModels.js";
 
 const BULK_PLACEHOLDER = `name1|sk-key1\nname2|sk-key2\nsk-key-only-auto-named`;
+const MODAL_BULK_PLACEHOLDER = `name1|sk-key1|https://your-workspace--your-app.us-west.modal.direct/v1\nname2|sk-key2|https://your-workspace--your-other-app.us-west.modal.direct/v1`;
 
 export default function AddApiKeyModal({ isOpen, provider, providerName, isCompatible, isAnthropic, authType, authHint, website, proxyPools, error, existingNames, onSave, onBulkDone, onClose }) {
   const NONE_PROXY_POOL_VALUE = "__none__";
@@ -20,6 +22,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
 
   const isAzure = provider === "azure";
   const isCloudflareAi = provider === "cloudflare-ai";
+  const isModal = provider === "modal";
   const providerRegions = AI_PROVIDERS?.[provider]?.regions || null;
   const defaultRegion = AI_PROVIDERS?.[provider]?.defaultRegion || providerRegions?.[0]?.id || "";
 
@@ -30,6 +33,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     priority: 1,
     proxyPoolId: NONE_PROXY_POOL_VALUE,
     ollamaHostUrl: "",
+    modalUrls: [""],
   });
   const [azureData, setAzureData] = useState({
     azureEndpoint: "",
@@ -44,9 +48,11 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   const [saving, setSaving] = useState(false);
   const bulkPlaceholder = isCloudflareAi
     ? `name1|sk-key1|acc123456\nname2|sk-key2|def789012\nsk-key-only-auto-named`
-    : provider === "qoder"
-      ? `name1|pt-xxxxx\nname2|pt-yyyyy\npt-only-auto-named`
-      : BULK_PLACEHOLDER;
+    : isModal
+      ? MODAL_BULK_PLACEHOLDER
+      : provider === "qoder"
+        ? `name1|pt-xxxxx\nname2|pt-yyyyy\npt-only-auto-named`
+        : BULK_PLACEHOLDER;
 
   const [mode, setMode] = useState("single"); // "single" | "bulk"
   const [bulkText, setBulkText] = useState("");
@@ -55,6 +61,10 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   const buildProviderSpecificData = () => {
     if (isOllamaLocal && formData.ollamaHostUrl.trim()) {
       return { baseUrl: formData.ollamaHostUrl.trim() };
+    }
+    if (isModal) {
+      const baseUrls = parseModalBaseUrls(formData.modalUrls);
+      return baseUrls.length ? { baseUrls } : undefined;
     }
     if (isAzure) {
       return {
@@ -97,6 +107,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
       // Non-ollama providers require a name
       if (!formData.name) return;
     }
+    if (isModal && !parseModalBaseUrls(formData.modalUrls).length) return;
     if (isCompatible && !formData.defaultModel.trim()) return;
 
     setSaving(true);
@@ -139,7 +150,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     // Plan collision-free names against existing connections so a generated
     // "Key N" never matches a saved name (which the backend would upsert /
     // overwrite instead of inserting). See bulkAdd.js for the full rationale.
-    const plan = planBulkAdd(lines, existingNames, { isCloudflareAi });
+    const plan = planBulkAdd(lines, existingNames, { isCloudflareAi, isModal });
     if (!plan.length) return;
     setSaving(true);
     setBulkResult(null);
@@ -201,9 +212,11 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
             <p className="text-xs text-text-muted">
               {isCloudflareAi
                 ? <>One key per line. Format: <code>name|apiKey|accountId</code> or just <code>apiKey</code> (auto-named by index).</>
-                : provider === "qoder"
-                  ? <>One PAT per line. Format: <code>name|pt-...</code> or just <code>pt-...</code> (auto-named by index).</>
-                  : <>One key per line. Format: <code>name|apiKey</code> or just <code>apiKey</code> (auto-named by index).</>
+                : isModal
+                  ? <>One token per line. Format: <code>name|apiKey|url1,url2</code> or just <code>apiKey</code> (auto-named by index). URLs can be added later in Edit.</>
+                  : provider === "qoder"
+                    ? <>One PAT per line. Format: <code>name|pt-...</code> or just <code>pt-...</code> (auto-named by index).</>
+                    : <>One key per line. Format: <code>name|apiKey</code> or just <code>apiKey</code> (auto-named by index).</>
               }
             </p>
             <textarea
@@ -283,6 +296,14 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
               </>
             )}
           </p>
+        )}
+        {isModal && (
+          <EndpointUrlsInput
+            values={formData.modalUrls}
+            onChange={(modalUrls) => setFormData({ ...formData, modalUrls })}
+            placeholder="https://your-workspace--your-app.us-west.modal.direct/v1"
+            hint={<>One token works across every endpoint (<code>https://&lt;workspace&gt;--&lt;app&gt;.&lt;region&gt;.modal.direct/v1</code>). {`"Discover Models"`} maps each model to the endpoint that serves it.</>}
+          />
         )}
         {providerRegions && (
           <Select
@@ -393,7 +414,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         </p>
 
         <div className="flex gap-2">
-          <Button onClick={handleSubmit} fullWidth disabled={saving || (!isOllamaLocal && (!formData.name || !formData.apiKey)) || (isCompatible && !formData.defaultModel.trim()) || (isAzure && (!azureData.azureEndpoint || !azureData.deployment || !azureData.organization)) || (isCloudflareAi && !cloudflareData.accountId)}>
+          <Button onClick={handleSubmit} fullWidth disabled={saving || (!isOllamaLocal && (!formData.name || !formData.apiKey)) || (isModal && parseModalBaseUrls(formData.modalUrls).length === 0) || (isCompatible && !formData.defaultModel.trim()) || (isAzure && (!azureData.azureEndpoint || !azureData.deployment || !azureData.organization)) || (isCloudflareAi && !cloudflareData.accountId)}>
             {saving ? "Saving..." : "Save"}
           </Button>
           <Button onClick={onClose} variant="ghost" fullWidth>

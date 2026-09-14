@@ -2,6 +2,7 @@ import { getProviderConnections, validateApiKey, updateProviderConnection, getSe
 import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
+import { PROVIDERS } from "open-sse/config/providers.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { getAntigravityQuotaCache } from "./antigravityQuota.js";
 import * as log from "../utils/logger.js";
@@ -10,6 +11,17 @@ import * as log from "../utils/logger.js";
 let selectionMutex = Promise.resolve();
 
 const GITHUB_MONTHLY_USAGE_LIMIT = "you've reached your additional usage limit for your plan";
+
+/**
+ * Provider-declared health policy (registry transport.health). Providers whose
+ * upstream endpoints are user-operated (e.g. Modal apps) park the whole account
+ * for a fixed window on failure and disable it after repeated failures, instead
+ * of the generic transient backoff.
+ */
+function providerHealthPolicy(provider) {
+  if (!provider) return null;
+  return PROVIDERS[resolveProviderId(provider)]?.health || null;
+}
 
 function githubMonthlyResetMs(status, errorText, provider) {
   if (resolveProviderId(provider) !== "github" || Number(status) !== 402) return null;
@@ -263,21 +275,38 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   }
   if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
 
+  // Provider-declared minimum cooldown (registry transport.health). Raises the
+  // generic transient/backoff window to the provider's full park time without
+  // shortening any longer provider-reported reset (GitHub month, resets_at).
+  const healthPolicy = providerHealthPolicy(provider);
+  if (healthPolicy?.cooldownMs) cooldownMs = Math.max(cooldownMs, healthPolicy.cooldownMs);
+
   const reason = typeof errorText === "string" ? errorText.slice(0, 100) : "Provider error";
   const lockUpdate = buildModelLockUpdate(githubResetAtMs ? null : model, cooldownMs);
+
+  // Failure strikes: a run of failures disables the account, so a dead endpoint
+  // stops being retried instead of burning every request. A successful request
+  // (clearAccountError) or a manual re-enable clears the count.
+  const strikeLimit = healthPolicy?.disableAfterStrikes || 0;
+  const strikes = strikeLimit ? (conn?.failureStrikes || 0) + 1 : 0;
+  const autoDisabled = strikeLimit > 0 && strikes >= strikeLimit;
 
   await updateProviderConnection(connectionId, {
     ...lockUpdate,
     testStatus: "unavailable",
-    lastError: reason,
+    lastError: autoDisabled
+      ? `Disabled after ${strikes} failures in a row — last: ${reason}`.slice(0, 140)
+      : reason,
     errorCode: status,
     lastErrorAt: new Date().toISOString(),
-    backoffLevel: newBackoffLevel ?? backoffLevel
+    backoffLevel: newBackoffLevel ?? backoffLevel,
+    ...(strikeLimit ? { failureStrikes: strikes } : {}),
+    ...(autoDisabled ? { isActive: false } : {})
   });
 
   const lockKey = Object.keys(lockUpdate)[0];
   const connName = conn?.displayName || conn?.name || conn?.email || connectionId.slice(0, 8);
-  log.warn("AUTH", `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}]`);
+  log.warn("AUTH", `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}]${autoDisabled ? ` — account disabled after ${strikes} failures` : ""}`);
 
   if (provider && status && reason) {
     console.error(`❌ ${provider} [${status}]: ${reason}`);
@@ -300,8 +329,9 @@ export async function clearAccountError(connectionId, currentConnection, model =
   const conn = currentConnection._connection || currentConnection;
   const now = Date.now();
   const allLockKeys = Object.keys(conn).filter(k => k.startsWith("modelLock_"));
+  const strikes = conn.failureStrikes || 0;
 
-  if (!conn.testStatus && !conn.lastError && allLockKeys.length === 0) return;
+  if (!conn.testStatus && !conn.lastError && allLockKeys.length === 0 && strikes === 0) return;
 
   // Keys to clear: current model's lock + all expired locks
   const keysToClear = allLockKeys.filter(k => {
@@ -311,7 +341,7 @@ export async function clearAccountError(connectionId, currentConnection, model =
     return expiry && new Date(expiry).getTime() <= now;   // expired
   });
 
-  if (keysToClear.length === 0 && conn.testStatus !== "unavailable" && !conn.lastError) return;
+  if (keysToClear.length === 0 && conn.testStatus !== "unavailable" && !conn.lastError && strikes === 0) return;
 
   // Check if any active locks remain after clearing
   const remainingActiveLocks = allLockKeys.filter(k => {
@@ -321,6 +351,9 @@ export async function clearAccountError(connectionId, currentConnection, model =
   });
 
   const clearObj = Object.fromEntries(keysToClear.map(k => [k, null]));
+
+  // A working request proves the account is healthy: drop accumulated strikes.
+  if (strikes > 0) clearObj.failureStrikes = 0;
 
   // Only reset error state if no active locks remain
   if (remainingActiveLocks.length === 0) {

@@ -9,6 +9,7 @@ import {
 import { APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { AI_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider } from "@/shared/constants/providers";
 import { normalizeProviderId, normalizeProviderSpecificData } from "@/lib/providerNormalization";
+import { normalizeModalToken } from "open-sse/services/modalModels.js";
 
 export const dynamic = "force-dynamic";
 
@@ -88,7 +89,9 @@ export async function POST(request) {
   try {
     const body = await request.json();
     const provider = normalizeProviderId(body.provider);
-    const { apiKey, name, displayName, priority, globalPriority, defaultModel, testStatus } = body;
+    const { name, displayName, priority, globalPriority, defaultModel, testStatus } = body;
+    // Modal tokens are often pasted with the header prefix ("Authorization: Bearer …").
+    const apiKey = provider === "modal" ? normalizeModalToken(body.apiKey) : body.apiKey;
     const proxyConfig = normalizeProxyConfig(body);
     if (proxyConfig.error) {
       return NextResponse.json({ error: proxyConfig.error }, { status: 400 });

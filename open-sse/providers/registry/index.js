@@ -128,6 +128,7 @@ import p125 from "./xquik.js";
 import p127 from "./phoenix-grove.js";
 import p128 from "./vultr.js";
 import p129 from "./novita.js";
+import p130 from "./modal.js";
 export default [
   p0,
   p1,
@@ -256,4 +257,5 @@ export default [
   p127,
   p128,
   p129,
+  p130,
 ];

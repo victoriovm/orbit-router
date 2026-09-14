@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getProviderConnectionById } from "@/lib/localDb";
 import { getProviderModels, PROVIDER_ID_TO_ALIAS } from "open-sse/config/providerModels.js";
-import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
 import { pingModelByKind } from "@/app/api/models/test/ping";
 
@@ -19,15 +18,15 @@ export async function POST(request, { params }) {
     }
 
     const providerId = connection.provider;
-    const isCompatible = isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
     const alias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
 
     let models = getProviderModels(alias);
 
     const baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`;
 
-    // Compatible providers: fetch live model list
-    if (isCompatible && models.length === 0) {
+    // Providers without a static catalog (Modal, compatible nodes) only know
+    // their models per connection — fall back to the live /models list.
+    if (models.length === 0) {
       try {
         const modelsRes = await fetch(`${baseUrl}/api/providers/${id}/models`);
         if (modelsRes.ok) {

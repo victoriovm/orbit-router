@@ -125,7 +125,8 @@
     "phoenix-grove": "phoenix-grove",
     "vultr": "vultr",
     "nov": "novita",
-    "novita": "novita"
+    "novita": "novita",
+    "modal": "modal"
   },
   "idToAlias": {
     "alicode": "alicode",
@@ -181,6 +182,7 @@
     "minimax-cn": "minimax-cn",
     "mistral": "mistral",
     "mmf": "mmf",
+    "modal": "modal",
     "morph": "morph",
     "nanobanana": "nanobanana",
     "nebius": "nebius",
@@ -275,6 +277,7 @@
     "minimax-cn",
     "mistral",
     "mmf",
+    "modal",
     "morph",
     "nanobanana",
     "nebius",

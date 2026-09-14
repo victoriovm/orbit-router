@@ -5,6 +5,7 @@ import {
   updateProviderConnection,
   deleteProviderConnection,
 } from "@/models";
+import { normalizeModalToken, pruneModalModelRoutes } from "open-sse/services/modalModels.js";
 
 function normalizeProxyConfig(body = {}) {
   const hasAnyProxyField =
@@ -122,7 +123,10 @@ export async function PUT(request, { params }) {
     if (globalPriority !== undefined) updateData.globalPriority = globalPriority;
     if (defaultModel !== undefined) updateData.defaultModel = defaultModel;
     if (isActive !== undefined) updateData.isActive = isActive;
-    if (apiKey && existing.authType === "apikey") updateData.apiKey = apiKey;
+    if (apiKey && existing.authType === "apikey") {
+      // Modal tokens are often pasted with the header prefix ("Authorization: Bearer …").
+      updateData.apiKey = existing.provider === "modal" ? normalizeModalToken(apiKey) : apiKey;
+    }
     if (testStatus !== undefined) updateData.testStatus = testStatus;
     if (lastError !== undefined) updateData.lastError = lastError;
     if (lastErrorAt !== undefined) updateData.lastErrorAt = lastErrorAt;
@@ -152,6 +156,12 @@ export async function PUT(request, { params }) {
         } else {
           updateData.providerSpecificData.proxyPoolId = proxyPoolResult.proxyPoolId;
         }
+      }
+
+      // Modal routes models per endpoint: drop discovered routes whose endpoint
+      // was just removed, so a removed URL can't keep receiving its models.
+      if (existing.provider === "modal") {
+        updateData.providerSpecificData = pruneModalModelRoutes(updateData.providerSpecificData);
       }
     }
 

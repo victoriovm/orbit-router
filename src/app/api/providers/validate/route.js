@@ -5,6 +5,7 @@ import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from "open-sse/config/providers.js";
 import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-to-commandcode.js";
 import { resolveQoderCredentials, resolveQoderModels } from "open-sse/services/qoderModels.js";
+import { listModalBaseUrls, normalizeModalToken } from "open-sse/services/modalModels.js";
 import { normalizeProviderId } from "@/lib/providerNormalization";
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
@@ -619,6 +620,42 @@ export async function POST(request) {
             signal: AbortSignal.timeout(10000),
           });
           isValid = res.status !== 401 && res.status !== 403 && res.status !== 422;
+          break;
+        }
+
+        case "modal": {
+          // One token spans every endpoint of the account: the key is bad only
+          // when an endpoint explicitly rejects it. Unreachable endpoints are
+          // tolerated as long as another one answered.
+          const modalUrls = listModalBaseUrls({ providerSpecificData });
+          if (!modalUrls.length) {
+            return NextResponse.json({
+              valid: false,
+              error: "Add at least one endpoint base URL (e.g. https://your-app.modal.run/v1)",
+            });
+          }
+          // Tolerate a token pasted with its header prefix ("Authorization: Bearer …").
+          const modalToken = normalizeModalToken(apiKey);
+          const probes = await Promise.all(modalUrls.map(async (base) => {
+            try {
+              const res = await fetch(`${base}/models`, {
+                headers: { Authorization: `Bearer ${modalToken}` },
+                signal: AbortSignal.timeout(10000),
+              });
+              if (res.status === 401 || res.status === 403) return { base, authFailed: true };
+              return { base, ok: res.ok, status: res.status };
+            } catch (err) {
+              return { base, error: err.message };
+            }
+          }));
+          const authFailed = probes.some((probe) => probe.authFailed);
+          const reachable = probes.filter((probe) => probe.ok);
+          isValid = reachable.length > 0 && !authFailed;
+          if (!isValid) {
+            error = authFailed
+              ? "Invalid API token"
+              : `No endpoint responded: ${probes.map((probe) => `${probe.base}: ${probe.error || `HTTP ${probe.status}`}`).join("; ")}`;
+          }
           break;
         }
 
