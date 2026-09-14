@@ -1,6 +1,23 @@
-import { cpSync, existsSync } from "node:fs";
+import { cpSync, existsSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+
+// Turbopack's tracer falls back to walking the project root whenever the server graph
+// contains a runtime-computed filesystem path, and that walk ignores .gitignore — so
+// repo-only directories get copied into the standalone output. None of these are read at
+// runtime (the webpack build never shipped them), and logs/ is the one that matters most:
+// it accumulates captured request/response payloads that must not travel inside a
+// published CLI package or container image.
+const REPO_ONLY_DIRS = ["logs", "tests", "docs", "images", "gitbook", "cli", ".github", ".vscode", ".zcode"];
+
+function pruneRepoOnlyDirs(standaloneDir) {
+  for (const name of REPO_ONLY_DIRS) {
+    const target = resolve(standaloneDir, name);
+    if (!existsSync(target)) continue;
+    rmSync(target, { recursive: true, force: true });
+    console.log(`[standalone-assets] Pruned repo-only dir from standalone: ${name}`);
+  }
+}
 
 export function copyStandaloneAssets({ projectRoot = process.cwd(), distDir = process.env.NEXT_DIST_DIR || ".next" } = {}) {
   if (process.env.NEXT_TRACING_ROOT_MODE === "workspace") {
@@ -15,6 +32,8 @@ export function copyStandaloneAssets({ projectRoot = process.cwd(), distDir = pr
     console.log(`[standalone-assets] No standalone build found at ${standaloneDir}`);
     return;
   }
+
+  pruneRepoOnlyDirs(standaloneDir);
 
   const staticSource = resolve(buildDir, "static");
   const staticDestination = resolve(standaloneDir, distDir, "static");

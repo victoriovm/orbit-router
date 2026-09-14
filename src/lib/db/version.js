@@ -7,7 +7,7 @@ export function getAppVersion() {
   if (cachedVersion) return cachedVersion;
   try {
     const pkgPath = path.join(process.cwd(), "package.json");
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    const pkg = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ pkgPath, "utf-8"));
     cachedVersion = pkg.version || "0.0.0";
   } catch {
     cachedVersion = "0.0.0";

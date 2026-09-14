@@ -26,7 +26,20 @@ const nextConfig = {
   },
   outputFileTracingRoot: tracingRoot,
   outputFileTracingExcludes: {
-    "*": ["./gitbook/**/*"]
+    // Turbopack's tracer falls back to walking the project root when it meets a
+    // runtime-computed path, and that walk ignores .gitignore. Keep repo-only dirs out
+    // of the standalone output: logs/ especially, since it accumulates per-request
+    // payloads that must never end up inside a published CLI package or image.
+    "*": [
+      "./gitbook/**/*",
+      "./logs/**/*",
+      "./tests/**/*",
+      "./docs/**/*",
+      "./images/**/*",
+      "./cli/**/*",
+      "./.github/**/*",
+      "./.vscode/**/*",
+    ]
   },
   images: {
     unoptimized: true
@@ -37,6 +50,9 @@ const nextConfig = {
     proxyClientMaxBodySize,
     // Cache fetch responses across HMR refreshes for faster dev reloads.
     serverComponentsHmrCache: true,
+    // Keep Turbopack's compilation cache on disk between builds so a rebuild only
+    // recompiles what changed instead of the whole graph.
+    turbopackFileSystemCacheForBuild: true,
     // Tree-shake heavy barrel imports to cut compile + bundle size
     optimizePackageImports: ["@xyflow/react", "@dnd-kit/core", "@dnd-kit/sortable", "material-symbols", "marked", "recharts"],
   },
