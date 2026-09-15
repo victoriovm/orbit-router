@@ -57,6 +57,7 @@ function MetricCard({ label, value, detail, icon, tone = "text-text-main", loadi
 export default function HomePageClient() {
   const [overview, setOverview] = useState(null);
   const [exactModelsCount, setExactModelsCount] = useState(null);
+  const [modelsCountFailed, setModelsCountFailed] = useState(false);
   const [overviewFailed, setOverviewFailed] = useState(false);
   const [locale, setLocale] = useState(() => getCurrentLocale());
 
@@ -86,9 +87,10 @@ export default function HomePageClient() {
       }
     };
 
-    // One round-trip paints the whole page: counters, provider health, recent
-    // requests and the chart arrive together. The exact live models number
-    // refreshes in the background without blocking first paint.
+    // One round-trip paints the page: counters, provider health, recent
+    // requests and the chart arrive together. The exact live models number is
+    // requested in parallel — its card holds its skeleton until it settles, so
+    // the overview's local-tables estimate never flashes on screen.
     fetchWithTimeout("/api/dashboard/overview", 8000)
       .then((data) => {
         if (cancelled) return;
@@ -96,15 +98,17 @@ export default function HomePageClient() {
       })
       .catch(() => {
         if (!cancelled) setOverviewFailed(true);
-      })
-      .finally(() => {
+      });
+
+    fetchWithTimeout("/api/models/count", 8000)
+      .then((data) => {
         if (cancelled) return;
-        fetchWithTimeout("/api/models/count", 8000)
-          .then((data) => {
-            const count = Number(data?.count);
-            if (Number.isFinite(count)) setExactModelsCount(count);
-          })
-          .catch(() => {});
+        const count = Number(data?.count);
+        if (Number.isFinite(count)) setExactModelsCount(count);
+        else setModelsCountFailed(true);
+      })
+      .catch(() => {
+        if (!cancelled) setModelsCountFailed(true);
       });
 
     return () => {
@@ -171,9 +175,14 @@ export default function HomePageClient() {
     };
   }, [connections, overview]);
 
-  // Local-tables estimate paints instantly; the exact live count swaps in when
-  // the background /api/models/count request resolves.
+  // The overview carries only a local-tables estimate, which diverges from the
+  // live count (dynamic catalogs are counted only by /api/models/count). Keep
+  // the skeleton until the exact request settles, so the card never paints the
+  // estimate and swaps to a different number a moment later. The estimate is
+  // still the fallback when that request fails.
+  const modelsCountResolved = exactModelsCount !== null || modelsCountFailed;
   const displayModelsCount = exactModelsCount ?? overview?.modelsCount ?? 0;
+  const modelsLoading = (overview === null && !overviewFailed) || !modelsCountResolved;
   const loading = overview === null;
 
   const allEnabledAccountsHealthy = providerStats.healthyAccounts === providerStats.enabledAccounts;
@@ -204,7 +213,7 @@ export default function HomePageClient() {
 
       <section aria-label={translate("Gateway overview")} className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
         <MetricCard label={translate("Providers")} value={providerStats.providers} detail={translate("Connected")} icon="dns" tone="text-orange-500" loading={loading} />
-        <MetricCard label={translate("Models")} value={numberFormatter.format(displayModelsCount)} detail={translate("Available")} icon="deployed_code" tone="text-cyan-400" loading={loading} />
+        <MetricCard label={translate("Models")} value={numberFormatter.format(displayModelsCount)} detail={translate("Available")} icon="deployed_code" tone="text-cyan-400" loading={modelsLoading} />
         <MetricCard label={translate("Requests")} value={numberFormatter.format(usage?.totalRequests || 0)} detail={translate("Today")} icon="send" tone="text-primary" loading={loading} />
         <MetricCard label={translate("Tokens")} value={numberFormatter.format(tokensToday)} detail={translate("Used today")} icon="token" tone="text-info" loading={loading} />
         <MetricCard label={translate("In progress")} value={numberFormatter.format(activeRequests)} detail={translate("Active requests")} icon="design_services" tone="text-success" loading={loading} />
