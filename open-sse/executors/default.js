@@ -6,7 +6,7 @@ import { OAUTH_ENDPOINTS, buildKimiHeaders } from "../config/appConstants.js";
 import { buildClineHeaders } from "../shared/clineAuth.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
-import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
+import { stripUnsupportedParams, ensureMaxTokens } from "../translator/concerns/paramSupport.js";
 
 // Auth header descriptors — derived from registry transport.auth, fallback to hardcoded defaults.
 const BEARER = { combined: true, header: "Authorization", scheme: "bearer" };
@@ -76,6 +76,10 @@ export class DefaultExecutor extends BaseExecutor {
         delete transformed.client_metadata;
       }
       stripUnsupportedParams(this.provider, model, transformed);
+      // quirk: endpoints that reject a request without an output cap (Vultr)
+      if (this.config.quirks?.requireMaxTokens) {
+        ensureMaxTokens(this.provider, model, transformed);
+      }
       // ponytail: Console Go Muse Spark rejects forced tool_choice (only "auto" supported); demote to auto. Move to registry quirk when a second model needs it.
       const suffix = typeof model === "string" ? model.match(/\((?:none|off|auto|minimal|low|medium|high|xhigh|max|ultra|\d+)\)\s*$/i) : null;
       const bare = suffix ? model.slice(0, suffix.index).trim() : model;

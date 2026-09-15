@@ -38,6 +38,19 @@ function clampNumber(body, key, ceiling) {
   }
 }
 
+// Fill max_tokens when a provider expects an output cap on every request
+// (Vultr requires max_tokens). Opt-in per provider via
+// transport.quirks.requireMaxTokens; an explicit cap the client already sent is
+// kept, under any of the three spellings.
+export function ensureMaxTokens(provider, model, body) {
+  if (!body || typeof body !== "object" || body.max_tokens != null) return body;
+  const explicit = [body.max_completion_tokens, body.max_output_tokens]
+    .find(v => typeof v === "number" && Number.isFinite(v) && v > 0);
+  const value = explicit ?? getCapabilitiesForModel(provider, model).maxOutput;
+  if (Number.isFinite(value) && value > 0) body.max_tokens = value;
+  return body;
+}
+
 // Remove unsupported params from body in place; returns body.
 export function stripUnsupportedParams(provider, model, body) {
   if (!model || !body || typeof body !== "object") return body;

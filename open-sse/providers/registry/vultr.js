@@ -18,6 +18,10 @@ export default {
   transport: {
     baseUrl: "https://api.vultrinference.com/v1/chat/completions",
     validateUrl: "https://api.vultrinference.com/v1/models",
+    // Vultr Inference expects an explicit output cap: max_tokens must be present
+    // on every chat request. The executor fills it with the model's own ceiling
+    // when the client sent none.
+    quirks: { requireMaxTokens: true },
   },
   models: [],
   passthroughModels: true,
