@@ -23,6 +23,19 @@ const heartbeat = setInterval(() => {
 }, 30000);
 heartbeat.unref?.();
 
+// This worker is spawned by the running app, so it inherits that process's env.
+// Next's standalone server.js sets __NEXT_PRIVATE_STANDALONE_CONFIG (and friends)
+// at runtime; the build then skips config defaults and crashes with
+// "TypeError: generate is not a function" because generateBuildId is undefined.
+// Child builds must start from a clean Next environment.
+function buildEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("__NEXT_PRIVATE") || key === "__NEXT_PROCESSED_ENV") delete env[key];
+  }
+  return env;
+}
+
 function writeState(patch) {
   state = { ...state, ...patch, updatedAt: new Date().toISOString() };
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
@@ -60,10 +73,11 @@ function run(command, args, { phase, message, timeoutMs, captureStdout = false }
       cwd: repoRoot,
       windowsHide: true,
       shell: false,
-      env: process.env,
+      env: buildEnv(),
     });
 
     let stdout = "";
+    let output = "";
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
       reject(new Error(`${command} timed out`));
@@ -71,17 +85,34 @@ function run(command, args, { phase, message, timeoutMs, captureStdout = false }
 
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
+      output += chunk.toString();
       appendLog(chunk.toString());
     });
-    child.stderr.on("data", (chunk) => appendLog(chunk.toString()));
+    child.stderr.on("data", (chunk) => {
+      output += chunk.toString();
+      appendLog(chunk.toString());
+    });
     child.on("error", (error) => {
       clearTimeout(timer);
       reject(error);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve(captureStdout ? stdout : undefined);
-      else reject(new Error(`${command} exited with code ${code}`));
+      if (code === 0) {
+        resolve(captureStdout ? stdout : undefined);
+        return;
+      }
+      // The bare exit code is useless in the dashboard, so carry the tail of the
+      // command output into the state the panel renders.
+      const tail = output
+        .replace(/\u001b\[[0-9;]*m/g, "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(-4)
+        .join(" | ")
+        .slice(0, 400);
+      reject(new Error(`${command} exited with code ${code}${tail ? `: ${tail}` : ""}`));
     });
   });
 }
