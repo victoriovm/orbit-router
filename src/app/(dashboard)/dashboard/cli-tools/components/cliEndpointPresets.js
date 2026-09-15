@@ -1,4 +1,4 @@
-import { UPDATER_CONFIG } from "@/shared/constants/config";
+import { APP_CONFIG } from "@/shared/constants/config";
 
 // Browser-local preset stores (endpoints, API keys) shared by every CLI tool card
 function createStore({ storageKey, changeEvent, itemField, normalize = (v) => v, defaultName = (v) => v }) {
@@ -80,7 +80,7 @@ export function rememberEndpoint(baseUrl, { tunnelPublicUrl, tailscaleUrl, cloud
   const url = stripSlash(baseUrl);
   if (!url) return null;
 
-  const builtIns = [`http://127.0.0.1:${UPDATER_CONFIG.appPort}`, tunnelPublicUrl, tailscaleUrl, cloudUrl]
+  const builtIns = [`http://127.0.0.1:${APP_CONFIG.port}`, tunnelPublicUrl, tailscaleUrl, cloudUrl]
     .filter(Boolean)
     .flatMap((u) => [stripSlash(u), `${stripSlash(u)}/v1`]);
   if (builtIns.includes(url)) return null;

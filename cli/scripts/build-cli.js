@@ -310,17 +310,6 @@ function buildCliPackage() {
     console.log("⏭️  No MITM files found\n");
   }
 
-  // Step 7b: Copy standalone updater (headless Node process for install progress)
-  console.log("7️⃣ b Copying updater files...");
-  const updaterSrc = path.join(appDir, "src", "lib", "updater");
-  const updaterDest = path.join(cliAppDir, "src", "lib", "updater");
-  if (fs.existsSync(updaterSrc)) {
-    copyRecursive(updaterSrc, updaterDest);
-    console.log("✅ Copied updater files\n");
-  } else {
-    console.log("⏭️  No updater files found\n");
-  }
-
   // Step 8: Build MITM server (config driven - see app/cli/scripts/buildMitm.js)
   console.log("8️⃣  Building MITM server...");
   try {

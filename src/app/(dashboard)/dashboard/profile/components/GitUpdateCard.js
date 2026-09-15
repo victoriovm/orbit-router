@@ -270,8 +270,8 @@ export default function GitUpdateCard() {
         isOpen={showConfirm}
         onClose={() => setShowConfirm(false)}
         onConfirm={confirmUpdate}
-        title="Update 9Router"
-        message="Update 9Router now? The dashboard may be unavailable briefly while the update is installed."
+        title="Update Orbit Router"
+        message="Update Orbit Router now? The dashboard may be unavailable briefly while the update is installed."
         confirmText="Update now"
         cancelText="Cancel"
         variant="primary"
