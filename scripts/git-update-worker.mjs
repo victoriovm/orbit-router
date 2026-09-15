@@ -37,7 +37,9 @@ function commandSpec(command, args) {
     return { executable: command, args };
   }
 
-  const tokens = [`${command}.cmd`, ...args];
+  // Bare name through cmd.exe: PATH + PATHEXT resolve both npm-style shims
+  // (pm2.cmd) and standalone binaries (bun.exe) that ship without a .cmd.
+  const tokens = [command, ...args];
   if (tokens.some((token) => !/^[a-zA-Z0-9._:@/+\-]+$/.test(token))) {
     throw new Error(`Unsafe ${command} command argument`);
   }
@@ -97,9 +99,19 @@ try {
     captureStdout: true,
   });
   writeState({ targetCommit: installedCommit.trim() });
-  await run("npm", ["run", "build"], {
+  try {
+    await run("bun", ["--version"], {
+      phase: "building",
+      message: "Checking the Bun runtime...",
+      timeoutMs: 30 * 1000,
+    });
+  } catch {
+    throw new Error("Bun was not found on this machine. Install Bun (https://bun.sh) to build updates.");
+  }
+  // Runs the `build:bun` script plus its `postbuild:bun` hook (standalone assets).
+  await run("bun", ["run", "build:bun"], {
     phase: "building",
-    message: "Building the updated application...",
+    message: "Building the updated application with Bun...",
     timeoutMs: 30 * 60 * 1000,
   });
   await run("pm2", ["restart", processName], {
