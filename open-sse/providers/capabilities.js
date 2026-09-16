@@ -131,6 +131,12 @@ export const MODEL_CAPABILITIES = {
   // via OpenAI Responses input_image; reasoning supports up to xhigh.
   "muse-spark-1.2-contributor-free": { vision: true, reasoning: true, thinkingFormat: "openai", contextWindow: 1048576, maxOutput: 131072 },
   "muse-spark-1.3-contributor-free": { vision: true, reasoning: true, thinkingFormat: "openai", contextWindow: 1048576, maxOutput: 131072 },
+
+  // OpenCode Free Union Alpha — stealth agentic-coding model on /zen/v1/messages
+  // (Anthropic wire format). models.dev reports text+image input, reasoning and
+  // tool_call, context 262144 / output 131072. It speaks the Anthropic thinking
+  // shape (budget-based), so claude-budget is the native format.
+  "union-alpha": { vision: true, reasoning: true, thinkingFormat: "claude-budget", contextWindow: 262144, maxOutput: 131072 },
 };
 
 const KIRO_GPT_5_6_CAPABILITIES = { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 272000, maxOutput: 128000 };

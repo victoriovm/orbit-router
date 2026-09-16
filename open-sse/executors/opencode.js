@@ -19,6 +19,11 @@ const RESPONSES_MODELS = new Set([
   "muse-spark-1.2-contributor-free",
   "muse-spark-1.3-contributor-free",
 ]);
+// Models served by /zen/v1/messages (Anthropic wire format) — see the endpoints
+// table at https://opencode.ai/docs/zen.
+const MESSAGES_MODELS = new Set([
+  "union-alpha",
+]);
 
 function generateRequestId() {
   return `msg_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -36,6 +41,10 @@ function baseModelId(model) {
 function isResponsesModel(model) {
   const base = baseModelId(model);
   return RESPONSES_MODELS.has(base) || isMuseSparkModel(base);
+}
+
+function isMessagesModel(model) {
+  return MESSAGES_MODELS.has(baseModelId(model));
 }
 
 function resolveOpencodeSession(body, credentials) {
@@ -96,9 +105,9 @@ export class OpenCodeExecutor extends BaseExecutor {
 
   buildUrl(model) {
     const base = this.config.baseUrl;
-    return isResponsesModel(model)
-      ? `${base}/zen/v1/responses`
-      : `${base}/zen/v1/chat/completions`;
+    if (isResponsesModel(model)) return `${base}/zen/v1/responses`;
+    if (isMessagesModel(model)) return `${base}/zen/v1/messages`;
+    return `${base}/zen/v1/chat/completions`;
   }
 
   // Muse Spark only: Zen rate-limits per account (worth waiting out in place)
