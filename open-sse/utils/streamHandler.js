@@ -98,6 +98,9 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
  * activity), not here — output of the transform stream may be silent
  * for long periods while raw bytes still flow (e.g. Kiro EventStream
  * binary frames buffering, Claude reasoning streams).
+ *
+ * @param {function} [onAbortTerminal] - Receives a human-readable abort
+ * message and returns terminal SSE bytes to emit downstream.
  */
 export function createDisconnectAwareStream(transformStream, streamController, onAbortTerminal = null, options = {}) {
   const reader = transformStream.readable.getReader();
@@ -287,7 +290,9 @@ export function createDisconnectAwareStream(transformStream, streamController, o
  * @param {Response} providerResponse - Response from provider
  * @param {TransformStream} transformStream - Transform stream for SSE
  * @param {object} streamController - Stream controller from createStreamController
- * @param {function} [onAbortTerminal] - Synthesized terminal payload builder
+ * @param {function} [onAbortTerminal] - Synthesized terminal payload builder;
+ *   receives the human-readable abort reason ("upstream connection lost",
+ *   "stream stall timeout", "stream first-chunk timeout (ttft)")
  * @param {number} [stallTimeoutMs] - Inter-chunk stall budget
  * @param {object} [options]
  * @param {number} [options.heartbeatMs] - Downstream `: ping` interval while silent (0 disables)
@@ -303,10 +308,11 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
   let chunkCount = 0;
   let totalBytes = 0;
   let lastChunkAt = Date.now();
-  let stallFired = false;
+let stallFired = false;
   let stallError = null;
   let clientGone = false;
   let lastError = null;
+  let abortMessage = "upstream connection lost";
   const t0 = Date.now();
   const tag = "STREAM";
   const clearStall = () => {
@@ -318,6 +324,7 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
   const fireTimeout = (kind, budgetMs) => {
     stallFired = true;
     stallError = new Error(kind === "ttft" ? "stream first-chunk timeout (ttft)" : "stream stall timeout");
+    abortMessage = stallError.message;
     dbg(tag, `TIMEOUT ${kind}=${budgetMs}ms | chunks=${chunkCount} | bytes=${totalBytes} | sinceLast=${Date.now() - lastChunkAt}ms`);
     streamController.handleError?.(stallError);
     streamController.abort?.(stallError);
@@ -385,7 +392,7 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
   return createDisconnectAwareStream(
     { readable: transformedBody, writable: { getWriter: () => ({ abort: () => Promise.resolve() }) } },
     wrappedController,
-    onAbortTerminal,
+    onAbortTerminal ? () => onAbortTerminal(abortMessage) : null,
     { heartbeatMs, surfaceMidStreamErrors: options.surfaceMidStreamErrors }
   );
 }

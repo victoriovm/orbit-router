@@ -281,7 +281,7 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   const healthPolicy = providerHealthPolicy(provider);
   if (healthPolicy?.cooldownMs) cooldownMs = Math.max(cooldownMs, healthPolicy.cooldownMs);
 
-  const reason = typeof errorText === "string" ? errorText.slice(0, 100) : "Provider error";
+  const reason = typeof errorText === "string" ? errorText.slice(0, 200) : "Provider error";
   const lockUpdate = buildModelLockUpdate(githubResetAtMs ? null : model, cooldownMs);
 
   // Failure strikes: a run of failures disables the account, so a dead endpoint

@@ -30,16 +30,14 @@ const DOT_VERSION_PROVIDERS = new Set(["kr", "kiro"]);
 // base id; getModelUpstreamId re-appends the suffix for applyThinking.
 function findModel(models, modelId, aliasOrId) {
   if (!models) return undefined;
-  let baseId = modelId;
-  if (typeof baseId === "string") {
-    const sufMatch = baseId.match(/\([^()]+\)\s*$/);
-    if (sufMatch) baseId = baseId.slice(0, sufMatch.index).trim();
-  }
-  const found = models.find(m => m.id === baseId);
+  const baseModelId = typeof modelId === "string"
+    ? modelId.replace(/\([^()]+\)\s*$/, "").trim()
+    : modelId;
+  const found = models.find(m => m.id === modelId || m.id === baseModelId);
   if (found) return found;
   if (!DOT_VERSION_PROVIDERS.has(aliasOrId)) return undefined;
-  const normalized = normalizeModelId(baseId);
-  if (normalized === baseId) return undefined;
+  const normalized = normalizeModelId(baseModelId);
+  if (normalized === baseModelId) return undefined;
   return models.find(m => m.id === normalized);
 }
 
