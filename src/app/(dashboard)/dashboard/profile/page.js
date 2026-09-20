@@ -52,6 +52,9 @@ export default function ProfilePage() {
   const [oidcTestLoading, setOidcTestLoading] = useState(false);
   const [oidcTestStatus, setOidcTestStatus] = useState({ type: "", message: "" });
   const [oidcExpanded, setOidcExpanded] = useState(false);
+  const [catalogState, setCatalogState] = useState(null);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogPulling, setCatalogPulling] = useState(false);
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const oidcRedirectUri = origin ? `${origin}/api/auth/oidc/callback` : "/api/auth/oidc/callback";
@@ -144,6 +147,31 @@ export default function ProfilePage() {
       })
       .catch((error) => setPasskeyStatus({ type: "error", message: error.message }))
       .finally(() => setPasskeyLoading(false));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadCatalogState = async () => {
+      try {
+        const response = await fetch("/api/models/catalog-pull", { cache: "no-store" });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!cancelled) setCatalogState(data);
+      } catch (error) {
+        console.error("Failed to load model catalog state:", error);
+      } finally {
+        if (!cancelled) setCatalogLoading(false);
+      }
+    };
+
+    loadCatalogState();
+    // The server pulls hourly on its own; poll so the timestamp follows it.
+    const poll = setInterval(loadCatalogState, 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(poll);
+    };
   }, []);
 
   const updateOutboundProxy = async (e) => {
@@ -720,6 +748,24 @@ export default function ProfilePage() {
       }
     } catch (err) {
       console.error("Failed to update enableObservability:", err);
+    }
+  };
+
+  const handleCatalogRefresh = async () => {
+    setCatalogPulling(true);
+
+    try {
+      const res = await fetch("/api/models/catalog-pull", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (data.state) setCatalogState(data.state);
+      } else {
+        console.error("Failed to update model catalog:", data.error || res.status);
+      }
+    } catch (err) {
+      console.error("Failed to update model catalog:", err);
+    } finally {
+      setCatalogPulling(false);
     }
   };
 
@@ -1859,6 +1905,52 @@ export default function ProfilePage() {
               onChange={updateObservabilityEnabled}
               disabled={loading}
             />
+          </div>
+        </Card>
+
+        {/* Model Catalog */}
+        <Card>
+          <SettingsCardHeader
+            icon="category"
+            title="Model Catalog"
+            subtitle="Keeps the router's model data in sync with models.dev"
+            tone="green"
+            className="mb-4"
+          />
+          <div className="flex flex-col gap-3">
+            <div className="rounded-lg border border-border bg-bg p-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-2">
+                  <span className="material-symbols-outlined text-[20px] leading-none text-text-muted">history</span>
+                </div>
+                <div className="flex min-h-10 min-w-0 flex-1 flex-col justify-center">
+                  <p className="text-sm font-medium leading-5 sm:text-base">Last updated</p>
+                  <p className="text-xs leading-5 text-text-muted sm:text-sm">
+                    {catalogState?.meta?.pulledAt
+                      ? new Date(catalogState.meta.pulledAt).toLocaleString()
+                      : catalogLoading
+                        ? "Loading…"
+                        : "Never"}
+                  </p>
+                </div>
+                <Button
+                  variant="secondary"
+                  icon="refresh"
+                  loading={catalogPulling}
+                  disabled={catalogLoading}
+                  onClick={handleCatalogRefresh}
+                  className="shrink-0"
+                >
+                  Refresh
+                </Button>
+              </div>
+            </div>
+
+            <p className="text-xs text-text-muted">
+              {catalogState?.meta
+                ? `${catalogState.meta.models} models from ${catalogState.meta.providers} providers · updated automatically every hour`
+                : "Fetched automatically every hour and stored locally, ready to sync the router's model data."}
+            </p>
           </div>
         </Card>
 
