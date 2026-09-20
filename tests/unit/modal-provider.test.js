@@ -16,6 +16,7 @@ import {
   discoverModalModels,
   fetchModalModels,
   listModalBaseUrls,
+  modalConnectionServesModel,
   modalEndpointCandidates,
   modalModelDisplayId,
   normalizeModalBaseUrl,
@@ -41,6 +42,7 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
 const CONTA_UM_DEEPSEEK = "https://conta-um-deepseek.modal.run/v1";
 const CONTA_UM_GLM = "https://conta-um-glm.modal.run/v1";
 const CONTA_DOIS_GLM = "https://conta-dois-glm.modal.run/v1";
+const CONTA_DOIS_DEEPSEEK = "https://conta-dois-deepseek.modal.run/v1";
 
 const connection = (providerSpecificData, extra = {}) => ({
   id: "conn-1",
@@ -411,6 +413,28 @@ describe("modal endpoint candidates", () => {
   });
 });
 
+describe("modal connection serves model", () => {
+  it("answers definitively from the discovered catalog", () => {
+    const credentials = connection({
+      baseUrls: [CONTA_DOIS_GLM],
+      modelBaseUrls: { "glm-4.6": CONTA_DOIS_GLM },
+    });
+
+    expect(modalConnectionServesModel(credentials, "glm-4.6")).toBe(true);
+    // The model this account never hosted — the quota-fallback hazard.
+    expect(modalConnectionServesModel(credentials, MODEL)).toBe(false);
+    // Case changes, thinking suffixes and legacy author-prefixed ids all resolve.
+    expect(modalConnectionServesModel(credentials, "GLM-4.6")).toBe(true);
+    expect(modalConnectionServesModel(credentials, "glm-4.6(high)")).toBe(true);
+    expect(modalConnectionServesModel(credentials, "zai-org/GLM-4.6")).toBe(true);
+  });
+
+  it("returns null when the account has no discovered catalog yet", () => {
+    expect(modalConnectionServesModel(connection({ baseUrls: [CONTA_DOIS_GLM] }), "glm-4.6")).toBe(null);
+    expect(modalConnectionServesModel(connection({}), "glm-4.6")).toBe(null);
+  });
+});
+
 describe("modal request routing", () => {
   beforeEach(() => {
     fetchMock.mockReset();
@@ -504,6 +528,51 @@ describe("modal request routing", () => {
     // never locks the account nor counts a failure strike.
     const body = await result.response.json();
     expect(body.error.message).toContain("is not served by any configured endpoint");
+  });
+
+  it("refuses a model the account's catalog does not host instead of letting the first endpoint answer", async () => {
+    // The endpoint would happily answer — per-app endpoints serve their own
+    // deployment regardless of the body's model field — so the refusal must
+    // happen before any chat request leaves the router.
+    fetchMock.mockResolvedValue(fakeResponse(200, { choices: [] }));
+
+    const credentials = connection({
+      baseUrls: [CONTA_DOIS_GLM],
+      modelBaseUrls: { "glm-4.6": CONTA_DOIS_GLM },
+    }, { connectionId: "conn-dois" });
+    const result = await fastExecutor().execute({
+      model: MODEL, body: { messages: [] }, stream: false, credentials,
+    });
+
+    expect(result.response.status).toBe(404);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const body = await result.response.json();
+    expect(body.error.message).toContain("is not served by any configured endpoint");
+  });
+
+  it("gives a freshly deployed model one live discovery before refusing it", async () => {
+    // The persisted map predates the deployment: only /models knows the model
+    // is now hosted on the second endpoint.
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      const base = String(url).replace(/\/models$/, "");
+      const entries = base === CONTA_DOIS_DEEPSEEK ? [{ id: MODEL }] : [{ id: "zai-org/GLM-4.6" }];
+      return new Response(JSON.stringify({ object: "list", data: entries }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }));
+    fetchMock.mockResolvedValueOnce(fakeResponse(200, { choices: [] }));
+
+    const credentials = connection({
+      baseUrls: [CONTA_DOIS_GLM, CONTA_DOIS_DEEPSEEK],
+      modelBaseUrls: { "glm-4.6": CONTA_DOIS_GLM },
+    }, { connectionId: "conn-dois-fresh" });
+    const result = await fastExecutor().execute({
+      model: MODEL, body: { messages: [] }, stream: false, credentials,
+    });
+
+    expect(result.response.status).toBe(200);
+    expect(result.url).toBe(`${CONTA_DOIS_DEEPSEEK}/chat/completions`);
   });
 
   it("surfaces a wrong endpoint path instead of treating it as a model miss", async () => {

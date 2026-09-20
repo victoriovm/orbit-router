@@ -188,6 +188,28 @@ function mappedModalBaseUrl(credentials, model) {
 }
 
 /**
+ * Whether this connection is known to serve `model`, judged by its discovered
+ * route map (fresh RAM cache first, then the persisted one):
+ * - true  → the map has a route for the model.
+ * - false → a catalog was discovered for these endpoints and the model is not
+ *   in it. Per-app endpoints serve their own deployment regardless of the
+ *   body's model field, so sending the request anyway would get it answered by
+ *   whatever model the first endpoint hosts — while the router keeps logging
+ *   the requested id. Callers must not route the request to this connection.
+ * - null  → no catalog known (never discovered, or refresh pending); the
+ *   endpoints must be probed as before.
+ */
+export function modalConnectionServesModel(credentials, model) {
+  const map = getCachedModalModelRoutes(credentials) || credentials?.providerSpecificData?.modelBaseUrls;
+  if (!map || typeof map !== "object") return null;
+  const keys = modelLookupKeys(model);
+  if (keys.some((key) => map[key])) return true;
+  // Forgiving pass, same as mappedModalBaseUrl: clients rewrite ids freely.
+  const wanted = new Set(keys.map((key) => key.toLowerCase()));
+  return Object.keys(map).some((id) => wanted.has(String(id).toLowerCase()));
+}
+
+/**
  * Endpoints to try for `model`, in order: the endpoint discovered for it first
  * (when still configured), then the remaining configured endpoints. `mapped`
  * tells callers whether the first candidate is a discovered route — an

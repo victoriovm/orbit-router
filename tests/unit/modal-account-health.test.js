@@ -32,6 +32,7 @@ const MODEL = "deepseek-ai/DeepSeek-V4.1-Flash";
 const NOT_SERVED = `${MODEL} is not served by any configured endpoint of this account (2 checked) — check the endpoint URLs or run "Discover Models"`;
 const DEEPSEEK_URL = "https://conta-um-deepseek.modal.run/v1";
 const GLM_URL = "https://conta-um-glm.modal.run/v1";
+const CONTA_DOIS_GLM = "https://conta-dois-glm.modal.run/v1";
 const NOW = new Date("2026-09-14T12:00:00.000Z");
 const THIRTY_MIN_MS = 30 * 60 * 1000;
 
@@ -156,6 +157,64 @@ describe("block scope is the account, not the endpoint", () => {
     await expect(getProviderCredentials("modal", null, MODEL)).resolves.toMatchObject({
       allRateLimited: true,
       retryAfter: lockedUntil,
+    });
+  });
+});
+
+describe("quota fallback never routes to an account without the model", () => {
+  it("skips conta-dois (catalog has no such model) and reports the parked host's reset time", async () => {
+    const lockedUntil = new Date(NOW.getTime() + THIRTY_MIN_MS).toISOString();
+    dbMocks.getProviderConnections.mockResolvedValue([
+      {
+        id: "modal-a",
+        provider: "modal",
+        name: "conta-um",
+        apiKey: "sk-test",
+        isActive: true,
+        providerSpecificData: { baseUrls: [DEEPSEEK_URL, GLM_URL], modelBaseUrls: { [MODEL]: DEEPSEEK_URL } },
+        [`modelLock_${MODEL}`]: lockedUntil, // quota exhausted on conta-um
+      },
+      {
+        id: "modal-b",
+        provider: "modal",
+        name: "conta-dois",
+        apiKey: "sk-test-2",
+        isActive: true,
+        // conta-dois hosts a glm endpoint only — selecting it would get the
+        // request answered by its glm app while the logs keep saying MODEL.
+        providerSpecificData: { baseUrls: [CONTA_DOIS_GLM], modelBaseUrls: { "glm-4.6": CONTA_DOIS_GLM } },
+      },
+    ]);
+
+    await expect(getProviderCredentials("modal", null, MODEL)).resolves.toMatchObject({
+      allRateLimited: true,
+      retryAfter: lockedUntil,
+    });
+  });
+
+  it("selects conta-dois when its catalog does host the model", async () => {
+    const lockedUntil = new Date(NOW.getTime() + THIRTY_MIN_MS).toISOString();
+    dbMocks.getProviderConnections.mockResolvedValue([
+      {
+        id: "modal-a",
+        provider: "modal",
+        isActive: true,
+        providerSpecificData: { baseUrls: [DEEPSEEK_URL], modelBaseUrls: { [MODEL]: DEEPSEEK_URL } },
+        [`modelLock_${MODEL}`]: lockedUntil,
+      },
+      {
+        id: "modal-b",
+        provider: "modal",
+        isActive: true,
+        providerSpecificData: {
+          baseUrls: [CONTA_DOIS_GLM],
+          modelBaseUrls: { "glm-4.6": CONTA_DOIS_GLM, [MODEL]: CONTA_DOIS_GLM },
+        },
+      },
+    ]);
+
+    await expect(getProviderCredentials("modal", null, MODEL)).resolves.toMatchObject({
+      connectionId: "modal-b",
     });
   });
 });

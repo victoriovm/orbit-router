@@ -2,6 +2,7 @@ import { DefaultExecutor } from "./default.js";
 import {
   buildModelNotServedResponse,
   classifyEndpointMiss,
+  modalConnectionServesModel,
   modalEndpointCandidates,
   normalizeModalToken,
   resolveModalUpstreamModelId,
@@ -37,9 +38,26 @@ export class ModalExecutor extends DefaultExecutor {
   // failure so a broken endpoint gets parked instead of silently skipped.
   async execute(options) {
     const { credentials, model } = options;
-    const { candidates } = modalEndpointCandidates(credentials, model);
     // Keep the route map warm without adding latency to this request.
     scheduleModalRoutesRefresh(credentials);
+
+    // A discovered catalog is authoritative: per-app endpoints serve their own
+    // deployment regardless of the body's model field, so a request for a model
+    // this account does not host would be answered by whichever endpoint comes
+    // first — while the request keeps being logged as the requested model. When
+    // no catalog is in cache yet, wait out the route refresh (one /models
+    // round-trip) so a model deployed after the last discovery is not rejected
+    // on a stale map.
+    if (modalConnectionServesModel(credentials, model) !== true) {
+      const refresh = scheduleModalRoutesRefresh(credentials, { timeoutMs: 5000 });
+      if (refresh) await refresh;
+      if (modalConnectionServesModel(credentials, model) === false) {
+        const { candidates } = modalEndpointCandidates(credentials, model);
+        return { response: buildModelNotServedResponse(model, candidates.length) };
+      }
+    }
+
+    const { candidates } = modalEndpointCandidates(credentials, model);
 
     let lastResult = null;
     for (const baseUrl of candidates) {

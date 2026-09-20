@@ -1,6 +1,7 @@
 import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
 import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
+import { modalConnectionServesModel } from "open-sse/services/modalModels.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { PROVIDERS } from "open-sse/config/providers.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
@@ -97,6 +98,15 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     const availableConnections = connections.filter(c => {
       if (excludeSet.has(c.id)) return false;
       if (isModelLockActive(c, model)) return false;
+      // Modal: an account only serves the models its discovered endpoints host.
+      // Without this check, a quota fallback lands on an account that does not
+      // host the model and the request is answered by that account's first
+      // endpoint (per-app endpoints serve their own deployment) — logged as the
+      // requested model. Unknown catalogs (never discovered) stay eligible.
+      if (providerId === "modal" && model && modalConnectionServesModel({ ...c, connectionId: c.id }, model) === false) {
+        log.debug("AUTH", `  → ${c.id?.slice(0, 8)} | catalog has no ${model} — skipped`);
+        return false;
+      }
       // Antigravity: skip if live quota exhausted for this model
       if (isAntigravity && model && antigravityQuotaCache) {
         const quota = antigravityQuotaCache.get(c.id)?.[model];
@@ -141,7 +151,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
           lastErrorCode: earliestConn?.errorCode || null
         };
       }
-      log.warn("AUTH", `${provider} | all ${connections.length} accounts unavailable`);
+      log.warn("AUTH", `${provider} | all ${connections.length} accounts unavailable${model ? ` for ${model}` : ""}`);
       return null;
     }
 
