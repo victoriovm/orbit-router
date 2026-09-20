@@ -21,6 +21,8 @@ function buildInfo({ alias, providerId, model, kind, providerInfo }) {
     name: model.name || model.id,
     kind,
     owned_by: alias,
+    // Unabbreviated owner label, matching the `owned_by_name` on /v1/models.
+    owned_by_name: providerInfo?.name || alias,
     endpoint: KIND_ENDPOINT[kind] || null,
   };
   if (model.params) out.params = model.params;

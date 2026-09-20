@@ -49,6 +49,8 @@ function request(pathname, headers = {}) {
 
 const originalNodeEnv = process.env.NODE_ENV;
 
+// Probes use a key-gated LLM API path, never /v1/models: the model catalog is served
+// without a key by design, so it can no longer distinguish a trusted from a spoofed peer.
 describe("peer header trust", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -66,7 +68,7 @@ describe("peer header trust", () => {
   });
 
   it("rejects a spoofed loopback peer IP that carries no trust proof", async () => {
-    const response = await proxy(request("/api/v1/models", {
+    const response = await proxy(request("/api/v1/chat/completions", {
       host: "172.18.192.1:20140",
       "x-9r-real-ip": "127.0.0.1",
     }));
@@ -76,7 +78,7 @@ describe("peer header trust", () => {
   });
 
   it("rejects a spoofed loopback peer IP carrying a wrong trust token", async () => {
-    const response = await proxy(request("/api/v1/models", {
+    const response = await proxy(request("/api/v1/chat/completions", {
       host: "172.18.192.1:20140",
       "x-9r-real-ip": "127.0.0.1",
       "x-9r-peer-token": "guessed-token",
@@ -86,7 +88,7 @@ describe("peer header trust", () => {
   });
 
   it("rejects a spoofed loopback Host in production", async () => {
-    const response = await proxy(request("/api/v1/models", { host: "localhost" }));
+    const response = await proxy(request("/api/v1/chat/completions", { host: "localhost" }));
 
     expect(response.status).toBe(401);
   });
@@ -94,7 +96,7 @@ describe("peer header trust", () => {
   it("rejects a spoofed loopback peer IP when the wrapper never booted", async () => {
     delete process.env.NINEROUTER_PEER_TOKEN;
 
-    const response = await proxy(request("/api/v1/models", {
+    const response = await proxy(request("/api/v1/chat/completions", {
       host: "172.18.192.1:20140",
       "x-9r-real-ip": "127.0.0.1",
       "x-9r-peer-token": "any-token",
@@ -104,7 +106,7 @@ describe("peer header trust", () => {
   });
 
   it("keeps serving a genuinely local request stamped by the wrapper", async () => {
-    const response = await proxy(request("/api/v1/models", {
+    const response = await proxy(request("/api/v1/chat/completions", {
       host: "localhost:20128",
       "x-9r-real-ip": "127.0.0.1",
       "x-9r-peer-token": PEER_TOKEN,
@@ -119,7 +121,7 @@ describe("peer header trust", () => {
   it.each(["::ffff:127.0.0.1", "::1", "[::1]", "127.0.0.1", "::FFFF:127.0.0.1"])(
     "treats %s as a loopback peer",
     async (peerIp) => {
-      const response = await proxy(request("/api/v1/models", {
+      const response = await proxy(request("/api/v1/chat/completions", {
         host: "localhost:20128",
         "x-9r-real-ip": peerIp,
         "x-9r-peer-token": PEER_TOKEN,
@@ -132,7 +134,7 @@ describe("peer header trust", () => {
   it.each(["::ffff:10.204.111.34", "2001:db8::1", "[2001:db8::1]", "10.204.111.34"])(
     "refuses %s as a peer",
     async (peerIp) => {
-      const response = await proxy(request("/api/v1/models", {
+      const response = await proxy(request("/api/v1/chat/completions", {
         host: "localhost:20128",
         "x-9r-real-ip": peerIp,
         "x-9r-peer-token": PEER_TOKEN,
@@ -143,7 +145,7 @@ describe("peer header trust", () => {
   );
 
   it("still refuses a stamped non-loopback peer IP", async () => {
-    const response = await proxy(request("/api/v1/models", {
+    const response = await proxy(request("/api/v1/chat/completions", {
       host: "localhost:20128",
       "x-9r-real-ip": "10.204.111.34",
       "x-9r-peer-token": PEER_TOKEN,
@@ -167,7 +169,7 @@ describe("peer header trust", () => {
   it("accepts the legacy Host fallback only in development", async () => {
     process.env.NODE_ENV = "development";
 
-    const response = await proxy(request("/api/v1/models", { host: "localhost:20127" }));
+    const response = await proxy(request("/api/v1/chat/completions", { host: "localhost:20127" }));
 
     expect(response).toBe(mocks.nextResponse);
   });

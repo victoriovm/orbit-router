@@ -5,7 +5,7 @@ import {
   isAnthropicCompatibleProvider,
   isOpenAICompatibleProvider,
 } from "@/shared/constants/providers";
-import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";
+import { getProviderConnections, getCombos, getCustomModels, getModelAliases, getProviderNodes } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
@@ -370,6 +370,19 @@ export async function buildModelsList(kindFilter, options = {}) {
   } catch (e) {
     console.log("Could not fetch disabled models");
   }
+
+  // Custom compatible providers ("openai-compatible-chat-<uuid>") have no registry
+  // entry, so their human-readable owner name comes from the node the user created.
+  let nodeNameById = new Map();
+  try {
+    const nodes = await getProviderNodes();
+    nodeNameById = new Map(
+      nodes.filter((node) => node?.id && node?.name).map((node) => [node.id, node.name]),
+    );
+  } catch (e) {
+    console.log("Could not fetch provider nodes");
+  }
+
   const isConfiguredDisabled = (alias, modelId) =>
     Array.isArray(disabledByAlias[alias]) && disabledByAlias[alias].includes(modelId);
   const isDisabled = (alias, modelId) =>
@@ -416,6 +429,7 @@ export async function buildModelsList(kindFilter, options = {}) {
       id: combo.name,
       object: "model",
       owned_by: "combo",
+      owned_by_name: "Combo",
     };
     if (combo.kind === "webSearch" || combo.kind === "webFetch") {
       entry.kind = combo.kind;
@@ -461,6 +475,10 @@ export async function buildModelsList(kindFilter, options = {}) {
       }
 
       const providerInfo = AI_PROVIDERS[providerId];
+      // Unabbreviated owner label: the alias in `owned_by` is what model IDs use
+      // ("oc", "gh"), so clients showing a human-readable owner get the registry
+      // display name — or the node name for user-created compatible providers.
+      const ownerName = providerInfo?.name || nodeNameById.get(providerId) || outputAlias;
       if (!fastMode && providerInfo?.noAuth && providerInfo.modelsFetcher && !hasExplicitEnabledModels && !skipDynamicFetch) {
         const registeredModelIds = await fetchRegisteredModelIds(providerInfo);
         if (registeredModelIds.length > 0) rawModelIds = registeredModelIds;
@@ -563,6 +581,7 @@ export async function buildModelsList(kindFilter, options = {}) {
           id: `${outputAlias}/${modelId}`,
           object: "model",
           owned_by: outputAlias,
+          owned_by_name: ownerName,
         };
         // Live-catalog resolvers (kiro/qoder/github/clinepass) mostly only return
         // { id, name } — no per-model capability data. Fall back to the same
@@ -603,6 +622,7 @@ export async function buildModelsList(kindFilter, options = {}) {
           object: "model",
           kind: "webSearch",
           owned_by: outputAlias,
+          owned_by_name: ownerName,
         });
       }
       if (kindFilter.includes("webFetch") && providerInfo?.fetchConfig) {
@@ -611,6 +631,7 @@ export async function buildModelsList(kindFilter, options = {}) {
           object: "model",
           kind: "webFetch",
           owned_by: outputAlias,
+          owned_by_name: ownerName,
         });
       }
   }));

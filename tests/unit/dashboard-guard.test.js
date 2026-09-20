@@ -97,6 +97,35 @@ describe("dashboard guard public LLM API access", () => {
     expect(response.body.error).toBe("API key required for remote API access");
   });
 
+  it("allows remote /v1/models without an API key", async () => {
+    const response = await proxy(request("/v1/models", { host: "router.example.com" }));
+
+    expect(response).toBe(mocks.nextResponse);
+    expect(mocks.validateApiKey).not.toHaveBeenCalled();
+  });
+
+  it("allows remote rewritten /api/v1/models without an API key", async () => {
+    const response = await proxy(request("/api/v1/models", { host: "router.example.com" }));
+
+    expect(response).toBe(mocks.nextResponse);
+    expect(mocks.validateApiKey).not.toHaveBeenCalled();
+  });
+
+  it("keeps the nested model catalog routes keyless too", async () => {
+    for (const pathname of ["/v1/models/info", "/v1/models/image", "/v1/models/oc/big-pickle"]) {
+      const response = await proxy(request(pathname, { host: "router.example.com" }));
+
+      expect(response).toBe(mocks.nextResponse);
+    }
+    expect(mocks.validateApiKey).not.toHaveBeenCalled();
+  });
+
+  it("still gates the dashboard model routes next to the keyless catalog", async () => {
+    const response = await proxy(request("/api/models", { host: "router.example.com" }));
+
+    expect(response.status).toBe(401);
+  });
+
   it("allows loopback rewritten public LLM API without API key", async () => {
     const response = await proxy(localRequest("/api/v1/chat/completions", { host: "localhost:20128" }));
 
@@ -358,6 +387,15 @@ describe("dashboard guard Git update access", () => {
 });
 
 describe("dashboard guard helpers", () => {
+  it("scopes the keyless catalog to the models routes", () => {
+    expect(__test__.isPublicCatalog("/v1/models")).toBe(true);
+    expect(__test__.isPublicCatalog("/v1/models/info")).toBe(true);
+    expect(__test__.isPublicCatalog("/api/v1/models/oc/big-pickle")).toBe(true);
+    expect(__test__.isPublicCatalog("/v1/models-extra")).toBe(false);
+    expect(__test__.isPublicCatalog("/api/models")).toBe(false);
+    expect(__test__.isPublicCatalog("/v1/chat/completions")).toBe(false);
+  });
+
   it("extracts bearer API keys before x-api-key", () => {
     const apiRequest = request("/v1/chat/completions", {
       authorization: "Bearer bearer-key",

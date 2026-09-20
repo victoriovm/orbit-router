@@ -41,6 +41,11 @@ const PUBLIC_API_PATHS = [
 // Keep root-level rewrites here too: middleware runs before Next.js rewrites.
 const PUBLIC_PREFIXES = ["/v1", "/v1beta", "/api/v1", "/api/v1beta", "/codex", "/responses"];
 
+// Read-only model catalog: served without an API key, local or not. Model pickers
+// and setup wizards probe it before any credential exists, and it only exposes
+// model ids/names — never provider credentials.
+const PUBLIC_CATALOG_PATHS = ["/v1/models", "/api/v1/models"];
+
 // Always require JWT token regardless of requireLogin setting
 const ALWAYS_PROTECTED = [
   "/api/shutdown",
@@ -139,6 +144,11 @@ function isPublicLlmApi(pathname) {
   return PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
+// Covers /v1/models plus its sub-routes (kind listings, single-model lookup, info).
+function isPublicCatalog(pathname) {
+  return PUBLIC_CATALOG_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
+
 function extractApiKey(request) {
   const authHeader = request.headers.get("Authorization");
   if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
@@ -197,6 +207,7 @@ function isPublicApi(pathname) {
 export const __test__ = {
   isLocalRequest,
   isPublicLlmApi,
+  isPublicCatalog,
   extractApiKey,
   canAccessPublicLlmApi,
   canAccessLocalOnlyRoute,
@@ -229,6 +240,9 @@ export async function proxy(request) {
       return NextResponse.next();
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Model catalog reads skip the key gate entirely — no key, local or remote.
+  if (isPublicCatalog(pathname)) return NextResponse.next();
 
   if (isPublicLlmApi(pathname)) {
     if (await canAccessPublicLlmApi(request)) return NextResponse.next();
