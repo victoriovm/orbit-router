@@ -439,9 +439,14 @@ export const PATTERN_CAPABILITIES = [
  * Resolve capabilities for a model using the 4-step fallback chain,
  * merged over DEFAULT_CAPABILITIES so the result is always complete.
  *
+ * Every step ends merged over DEFAULT_CAPABILITIES, so the context window is
+ * always a number — including when nothing matched the id, in which case it is
+ * the 200k floor and a pure guess. `contextKnown` travels alongside so callers
+ * can tell the two apart (see resolveModelCapabilities).
+ *
  * @param {string} provider
  * @param {string} model
- * @returns {object} full capabilities object
+ * @returns {{ caps: object, contextKnown: boolean }}
  */
 const MODALITY_KEYS = ["vision", "pdf", "audioInput", "videoInput"];
 
@@ -534,8 +539,13 @@ function isCommandCodeTextOnly(model) {
   }
   return false;
 }
-export function getCapabilitiesForModel(provider, model) {
-  if (!model) return { ...DEFAULT_CAPABILITIES };
+// A model id the tables recognize — an exact entry or a family pattern — is one
+// we make a statement about, so its contextWindow is a decision rather than the
+// DEFAULT floor. Only an id nothing matches falls through to the floor, and that
+// is what `contextKnown` reports. The synced catalog cannot help here: it stores
+// deltas against registered models only, so it never covers an unmatched id.
+function resolveCapabilities(provider, model) {
+  if (!model) return { caps: { ...DEFAULT_CAPABILITIES }, contextKnown: false };
 
   // Canonical exact lookup strips vendor prefix: "anthropic/claude-opus-4.7" -> "claude-opus-4.7".
   const baseModel = model.includes("/") ? model.split("/").pop() : model;
@@ -544,37 +554,67 @@ export function getCapabilitiesForModel(provider, model) {
   // (deepseek-v4 → thinkingFormat:deepseek, vision:false) must not win here.
   if (provider === "commandcode" || provider === "cmc") {
     const providerCaps = PROVIDER_CAPABILITIES.commandcode;
-    if (providerCaps?.[model]) return { ...DEFAULT_CAPABILITIES, ...providerCaps[model] };
-    if (providerCaps?.[baseModel]) return { ...DEFAULT_CAPABILITIES, ...providerCaps[baseModel] };
+    const entry = providerCaps?.[model] || providerCaps?.[baseModel];
+    if (entry) return { caps: { ...DEFAULT_CAPABILITIES, ...entry }, contextKnown: true };
+    // The fallback below hardcodes the 1M window per the server's product config.
     return {
-      ...DEFAULT_CAPABILITIES,
-      reasoning: true,
-      thinkingFormat: "commandcode",
-      thinkingEffortSupported: true,
-      vision: !isCommandCodeTextOnly(model),
-      contextWindow: 1000000,
-      maxOutput: 384000,
+      caps: {
+        ...DEFAULT_CAPABILITIES,
+        reasoning: true,
+        thinkingFormat: "commandcode",
+        thinkingEffortSupported: true,
+        vision: !isCommandCodeTextOnly(model),
+        contextWindow: 1000000,
+        maxOutput: 384000,
+      },
+      contextKnown: true,
     };
   }
 
   // 1. Provider-specific override
   if (provider) {
     const providerCaps = PROVIDER_CAPABILITIES[provider];
-    if (providerCaps?.[model]) return { ...DEFAULT_CAPABILITIES, ...providerCaps[model] };
-    if (providerCaps?.[baseModel]) return { ...DEFAULT_CAPABILITIES, ...providerCaps[baseModel] };
+    const entry = providerCaps?.[model] || providerCaps?.[baseModel];
+    if (entry) return { caps: { ...DEFAULT_CAPABILITIES, ...entry }, contextKnown: true };
   }
 
   // 2. Canonical exact
-  if (MODEL_CAPABILITIES[baseModel]) return { ...DEFAULT_CAPABILITIES, ...MODEL_CAPABILITIES[baseModel] };
-  if (MODEL_CAPABILITIES[model]) return { ...DEFAULT_CAPABILITIES, ...MODEL_CAPABILITIES[model] };
+  const exact = MODEL_CAPABILITIES[baseModel] || MODEL_CAPABILITIES[model];
+  if (exact) return { caps: { ...DEFAULT_CAPABILITIES, ...exact }, contextKnown: true };
 
   // 3. Pattern match (first match wins), refined by catalog + name heuristic
   for (const { pattern, caps } of PATTERN_CAPABILITIES) {
     if (matchPattern(pattern, baseModel) || matchPattern(pattern, model)) {
-      return refine(caps, provider, model);
+      return { caps: refine(caps, provider, model), contextKnown: true };
     }
   }
 
   // 4. Floor
-  return refine(null, provider, model);
+  return { caps: refine(null, provider, model), contextKnown: false };
+}
+
+/**
+ * Resolve capabilities plus whether the model is one the tables know.
+ *
+ * `contextKnown` is false only for an id that matched no exact entry and no
+ * family pattern, so the 200k DEFAULT floor is standing in for a window nobody
+ * declared — a guess that can be wrong in either direction (a local 32k model,
+ * a 1M one nobody catalogued yet). /v1/models flags those entries rather than
+ * presenting the guess as a spec.
+ *
+ * @param {string} provider
+ * @param {string} model
+ * @returns {{ caps: object, contextKnown: boolean }}
+ */
+export function resolveModelCapabilities(provider, model) {
+  return resolveCapabilities(provider, model);
+}
+
+/**
+ * @param {string} provider
+ * @param {string} model
+ * @returns {object} full capabilities object (always complete, merged over DEFAULT_CAPABILITIES)
+ */
+export function getCapabilitiesForModel(provider, model) {
+  return resolveCapabilities(provider, model).caps;
 }

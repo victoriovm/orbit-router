@@ -19,7 +19,7 @@ import { discoverModalModels, listModalBaseUrls } from "open-sse/services/modalM
 import { updateProviderConnection } from "@/lib/localDb";
 import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
-import { capabilitiesFromServiceKind, getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
+import { capabilitiesFromServiceKind, resolveModelCapabilities } from "open-sse/providers/capabilities.js";
 import { FILTERS } from "../../providers/suggested-models/filters.js";
 
 function withTimeout(promise, ms) {
@@ -587,9 +587,10 @@ export async function buildModelsList(kindFilter, options = {}) {
         // { id, name } — no per-model capability data. Fall back to the same
         // pattern-matched capabilities the dashboard uses (useModelCaps.js) so
         // dynamically-discovered LLM models still surface vision/reasoning/search/tools.
-        const caps = liveCapabilitiesById.get(modelId)
-          || capabilitiesFromServiceKind(customKind || liveKind)
-          || (kind === LLM_KIND ? getCapabilitiesForModel(providerId, modelId) : null);
+        const liveCaps = liveCapabilitiesById.get(modelId);
+        const serviceCaps = capabilitiesFromServiceKind(customKind || liveKind);
+        const tableCaps = kind === LLM_KIND ? resolveModelCapabilities(providerId, modelId) : null;
+        const caps = liveCaps || serviceCaps || tableCaps?.caps || null;
         if (caps) model.capabilities = caps;
         // Token limits under the snake_case names the OpenAI/OpenRouter
         // convention uses. `capabilities.contextWindow` is camelCase and nested,
@@ -599,18 +600,26 @@ export async function buildModelsList(kindFilter, options = {}) {
         // Emitted at top level because not every client recurses into nested
         // objects; the camelCase `capabilities` block stays for compatibility.
         if (kind === LLM_KIND || allowAsLlm) {
+          const resolved = tableCaps || resolveModelCapabilities(providerId, modelId);
           let contextWindow = caps?.contextWindow;
           let maxOutput = caps?.maxOutput;
+          // Only a live resolver ships a window it observed upstream. Every other
+          // source defers to the tables, which also report whether they know the
+          // model at all — a service-kind capability like { vision: true } is
+          // partial by design, not an answer about context.
+          let contextKnown = Boolean(liveCaps) && Number.isFinite(contextWindow) && contextWindow > 0;
           // Live-catalog and service-kind capabilities are usually partial
           // (often just { tools: true }), so fill the gaps from the static
           // table rather than emitting null and leaving clients to guess.
-          if (!Number.isFinite(contextWindow) || !Number.isFinite(maxOutput)) {
-            const fallback = getCapabilitiesForModel(providerId, modelId);
-            if (!Number.isFinite(contextWindow)) contextWindow = fallback.contextWindow;
-            if (!Number.isFinite(maxOutput)) maxOutput = fallback.maxOutput;
-          }
+          if (!Number.isFinite(contextWindow)) contextWindow = resolved.caps.contextWindow;
+          if (!Number.isFinite(maxOutput)) maxOutput = resolved.caps.maxOutput;
+          if (!liveCaps) contextKnown = resolved.contextKnown;
           if (Number.isFinite(contextWindow)) model.context_length = contextWindow;
           if (Number.isFinite(maxOutput)) model.max_completion_tokens = maxOutput;
+          // The tables matched nothing, so the window above is the generic
+          // default standing in for a value we do not have. Flag it rather than
+          // drop it: a wrong number still beats the client inventing a bigger one.
+          if (!contextKnown) model.context_misconfig = true;
         }
         models.push(model);
       }
