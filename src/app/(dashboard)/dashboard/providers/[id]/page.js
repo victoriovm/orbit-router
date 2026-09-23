@@ -173,7 +173,7 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
   const apiKeyConnectionLabel =
     providerId === "xai" ? "xAI API Key"
     : providerId === "kimi" ? "Kimi API Key"
-    : providerId === "qoder" ? "PAT"
+    : (providerId === "qoder" || providerId === "qoder-cn") ? "PAT"
     : "API Key";
   // Resolve suffix "(level)" for a model when a thinking level is picked and the model supports it.
   const resolveThinkingSuffix = (modelId) => {
