@@ -1,7 +1,8 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { UsageStats, CardSkeleton, SegmentedControl } from "@/shared/components";
+import { CardSkeleton, SegmentedControl } from "@/shared/components";
+import UsageStats from "@/shared/components/UsageStats";
 
 const PERIODS = [
   { value: "today", label: "Today" },

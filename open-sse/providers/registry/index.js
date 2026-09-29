@@ -131,6 +131,11 @@ import p127 from "./phoenix-grove.js";
 import p128 from "./vultr.js";
 import p129 from "./novita.js";
 import p130 from "./modal.js";
+import p132 from "./tokenharbor.js";
+import p133 from "./dahl.js";
+import p134 from "./atria.js";
+import p135 from "./agnes.js";
+import p136 from "./bai.js";
 export default [
   p0,
   p1,
@@ -262,4 +267,9 @@ export default [
   p128,
   p129,
   p130,
+  p132,
+  p133,
+  p134,
+  p135,
+  p136,
 ];
