@@ -112,12 +112,16 @@ export default function GitUpdateCard() {
   }, [loadStatus]);
 
   const updateRunning = status?.operation?.status === "running" || status?.updateInProgress;
+  // The worker reports its real first phase within milliseconds, so poll quickly
+  // while the update is still spinning up and relax once it shows progress.
+  const waitingForWorker = updateRunning
+    && (!status?.operation?.phase || status?.operation?.phase === "starting");
 
   useEffect(() => {
     if (!updateRunning) return undefined;
-    const timer = setInterval(() => loadStatus(false, true), 2500);
+    const timer = setInterval(() => loadStatus(false, true), waitingForWorker ? 800 : 2500);
     return () => clearInterval(timer);
-  }, [loadStatus, updateRunning]);
+  }, [loadStatus, updateRunning, waitingForWorker]);
 
   const handleUpdate = () => {
     setShowConfirm(true);

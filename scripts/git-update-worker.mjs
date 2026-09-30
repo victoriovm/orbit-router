@@ -9,9 +9,34 @@ const config = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
 const { repoRoot, statePath, logPath, processName, operation } = config;
 let state = { ...operation };
 
-fs.mkdirSync(path.dirname(statePath), { recursive: true });
-fs.mkdirSync(path.dirname(logPath), { recursive: true });
-fs.writeFileSync(logPath, `[${new Date().toISOString()}] Git update started\n`, "utf8");
+// The dashboard re-reads this file every second or two and renders `message`
+// as-is, so publish the real first phase before any other I/O. Otherwise the
+// panel keeps showing "Starting Git update..." for a whole poll interval — or,
+// if the worker dies before its first write, until the heartbeat goes stale.
+try {
+  writeState({ phase: "pulling", message: "Downloading repository updates...", error: null });
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.writeFileSync(logPath, `[${new Date().toISOString()}] Git update started\n`, "utf8");
+} catch (error) {
+  failBoot(error);
+}
+
+// This worker runs with stdio "ignore", so an uncaught early crash would be
+// invisible: the app would sit on "Starting Git update..." with nothing to show.
+function failBoot(error) {
+  try {
+    writeState({
+      status: "error",
+      phase: "error",
+      message: "Update failed.",
+      error: String(error?.message || error),
+      finishedAt: new Date().toISOString(),
+    });
+  } catch {
+    // The state file itself is unwritable; the app's boot timeout covers this.
+  }
+  process.exit(1);
+}
 
 // Keeps updatedAt fresh so the main app can tell a live worker from a crashed one.
 const heartbeat = setInterval(() => {
@@ -38,6 +63,7 @@ function buildEnv() {
 
 function writeState(patch) {
   state = { ...state, ...patch, updatedAt: new Date().toISOString() };
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
 }
 

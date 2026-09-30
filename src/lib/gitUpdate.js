@@ -10,6 +10,9 @@ const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 120000;
 const UPDATE_STALE_MS = 60 * 60 * 1000;
 const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
+// The worker publishes its first phase within milliseconds of being spawned, so
+// a state still marked "starting" after this long means the worker never booted.
+const WORKER_BOOT_TIMEOUT_MS = 30 * 1000;
 const DEFAULT_PM2_PROCESS = "9router";
 const VALID_PM2_PROCESS = /^[a-zA-Z0-9._:@/+\-]+$/;
 
@@ -69,6 +72,9 @@ export function isGitUpdateRunning(state, now = Date.now()) {
   if (state?.status !== "running") return false;
   const startedAt = Date.parse(state.startedAt || "");
   if (!Number.isFinite(startedAt) || now - startedAt >= UPDATE_STALE_MS) return false;
+  // The worker swaps "starting" for its real first phase within milliseconds of
+  // booting, so a stale "starting" state means the worker never came up.
+  if (state.phase === "starting" && now - startedAt >= WORKER_BOOT_TIMEOUT_MS) return false;
   const updatedAt = Date.parse(state.updatedAt || "");
   if (Number.isFinite(updatedAt) && now - updatedAt >= HEARTBEAT_STALE_MS) return false;
   return true;
