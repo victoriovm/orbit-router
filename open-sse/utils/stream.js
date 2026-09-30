@@ -74,7 +74,11 @@ export function createSSEStream(options = {}) {
   let accumulatedContent = "";
   let accumulatedThinking = "";
   let ttftAt = null;
-  let generationStartAt = null;
+  let firstContentAt = null;
+  let lastContentAt = null;
+  let contentDeltaCount = 0;
+  let firstDeltaChars = 0;
+  let totalOutputChars = 0;
   let sseLineCount = 0;
   let sseEmittedCount = 0;
   const eventTypeCounts = {};
@@ -86,8 +90,23 @@ export function createSSEStream(options = {}) {
   let streamDoneSent = false;  // track duplicate [DONE] across transform + flush
   let finalized = false;
 
-  const markGenerationStarted = () => {
-    if (!generationStartAt) generationStartAt = Date.now();
+  // Content timing: generation speed must be measured between two real content
+  // deltas. A provider that buffers emits hundreds of tokens in the first chunk
+  // after seconds of internal work — counting that chunk would credit tokens
+  // whose generation time was never observed.
+  //
+  // One SSE event = one delta: a chunk carrying several text/reasoning parts is
+  // one network delivery, so its parts are summed and marked once (otherwise a
+  // buffered multi-part event would look like many healthy deltas).
+  const markContentDelta = (charLength) => {
+    const now = Date.now();
+    if (firstContentAt === null) firstContentAt = now;
+    // Pieces parsed from the same SSE line share a tick but are only ever
+    // aggregated by the caller into a single markContentDelta call.
+    if (now === firstContentAt) firstDeltaChars += charLength;
+    lastContentAt = now;
+    contentDeltaCount++;
+    totalOutputChars += charLength;
   };
 
   // Usage/logging tail, callable from transform() as well as flush(): a client that
@@ -114,7 +133,13 @@ export function createSSEStream(options = {}) {
       onStreamComplete({
         content: accumulatedContent,
         thinking: accumulatedThinking
-      }, finalUsage, ttftAt, generationStartAt);
+      }, finalUsage, ttftAt, {
+        firstContentAt,
+        lastContentAt,
+        contentDeltaCount,
+        firstDeltaChars,
+        totalOutputChars
+      });
     }
   };
 
@@ -191,12 +216,14 @@ export function createSSEStream(options = {}) {
               }
 
               const responsesType = parsed.type;
+              let eventDeltaChars = 0;
               if ((responsesType === "response.output_text.delta" || responsesType === "response.reasoning_summary_text.delta")
                 && typeof parsed.delta === "string" && parsed.delta.length > 0) {
-                markGenerationStarted();
+                eventDeltaChars += parsed.delta.length;
               }
 
               if (!hasValuableContent(parsed, FORMATS.OPENAI)) {
+                if (eventDeltaChars > 0) markContentDelta(eventDeltaChars);
                 continue;
               }
 
@@ -204,15 +231,16 @@ export function createSSEStream(options = {}) {
               const content = delta?.content;
               const reasoning = delta?.reasoning_content;
               if (content && typeof content === "string") {
-                markGenerationStarted();
+                eventDeltaChars += content.length;
                 totalContentLength += content.length;
                 accumulatedContent += content;
               }
               if (reasoning && typeof reasoning === "string") {
-                markGenerationStarted();
+                eventDeltaChars += reasoning.length;
                 totalContentLength += reasoning.length;
                 accumulatedThinking += reasoning;
               }
+              if (eventDeltaChars > 0) markContentDelta(eventDeltaChars);
 
               const extracted = extractUsage(parsed);
               if (extracted) {
@@ -300,42 +328,43 @@ export function createSSEStream(options = {}) {
         }
 
         const responsesType = currentOpenAIResponsesEvent || parsed.type;
+        let eventDeltaChars = 0;
         if ((responsesType === "response.output_text.delta" || responsesType === "response.reasoning_summary_text.delta")
           && typeof parsed.delta === "string" && parsed.delta.length > 0) {
-          markGenerationStarted();
+          eventDeltaChars += parsed.delta.length;
         }
 
         // Claude format - content
         if (parsed.delta?.text) {
-          markGenerationStarted();
+          eventDeltaChars += parsed.delta.text.length;
           totalContentLength += parsed.delta.text.length;
           accumulatedContent += parsed.delta.text;
         }
         // Claude format - thinking
         if (parsed.delta?.thinking) {
-          markGenerationStarted();
+          eventDeltaChars += parsed.delta.thinking.length;
           totalContentLength += parsed.delta.thinking.length;
           accumulatedThinking += parsed.delta.thinking;
         }
-        
+
         // OpenAI format - content
         if (parsed.choices?.[0]?.delta?.content) {
-          markGenerationStarted();
+          eventDeltaChars += parsed.choices[0].delta.content.length;
           totalContentLength += parsed.choices[0].delta.content.length;
           accumulatedContent += parsed.choices[0].delta.content;
         }
         // OpenAI format - reasoning
         if (parsed.choices?.[0]?.delta?.reasoning_content) {
-          markGenerationStarted();
+          eventDeltaChars += parsed.choices[0].delta.reasoning_content.length;
           totalContentLength += parsed.choices[0].delta.reasoning_content.length;
           accumulatedThinking += parsed.choices[0].delta.reasoning_content;
         }
-        
+
         // Gemini format
         if (parsed.candidates?.[0]?.content?.parts) {
           for (const part of parsed.candidates[0].content.parts) {
             if (part.text && typeof part.text === "string") {
-              markGenerationStarted();
+              eventDeltaChars += part.text.length;
               totalContentLength += part.text.length;
               // Check if this is thinking content
               if (part.thought === true) {
@@ -346,6 +375,9 @@ export function createSSEStream(options = {}) {
             }
           }
         }
+
+        // One SSE event = one delta, however many parts it carried.
+        if (eventDeltaChars > 0) markContentDelta(eventDeltaChars);
 
         // Extract usage
         const extracted = extractUsage(parsed);

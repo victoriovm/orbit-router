@@ -145,13 +145,23 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
 export function buildOnStreamComplete({ provider, model, connectionId, apiKey, requestStartTime, body, stream, finalBody, translatedBody, clientRawRequest, pxpipe, reqTag, log }) {
   const streamDetailId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
-  const onStreamComplete = (contentObj, usage, ttftAt, generationStartAt) => {
+  const onStreamComplete = (contentObj, usage, ttftAt, contentTiming) => {
     const completedAt = Date.now();
     const latency = {
       ttft: ttftAt ? ttftAt - requestStartTime : completedAt - requestStartTime,
       total: completedAt - requestStartTime
     };
-    const generationMs = generationStartAt ? Math.max(0, completedAt - generationStartAt) : undefined;
+    // Generation window = first real content delta → last real content delta.
+    // Terminal events ([DONE], usage, finish_reason) are deliberately excluded:
+    // their arrival time says nothing about how long the model took to generate.
+    const firstContentAt = contentTiming?.firstContentAt;
+    const lastContentAt = contentTiming?.lastContentAt;
+    const generationMs = firstContentAt != null && lastContentAt != null
+      ? Math.max(0, lastContentAt - firstContentAt)
+      : undefined;
+    const contentDeltaCount = contentTiming?.contentDeltaCount;
+    const firstDeltaChars = contentTiming?.firstDeltaChars;
+    const totalOutputChars = contentTiming?.totalOutputChars;
     const safeContent = contentObj?.content || "[Empty streaming response]";
     const safeThinking = contentObj?.thinking || null;
 
@@ -170,7 +180,7 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, r
     });
 
     // Persist stream usage to DB (no console line; the "📊 done" line below is authoritative)
-    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, latencyMs: latency.total, generationMs, label: "STREAM USAGE", silent: true });
+    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, latencyMs: latency.total, generationMs, contentDeltaCount, firstDeltaChars, totalOutputChars, label: "STREAM USAGE", silent: true });
     if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency }));
   };
 

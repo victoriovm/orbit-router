@@ -15,29 +15,95 @@ const RING_CAP = 50;
 const CONN_CACHE_TTL_MS = 30 * 1000;
 const PERIOD_MS = { "24h": 86400000, "7d": 604800000, "30d": 2592000000, "60d": 5184000000 };
 
-export function calculateTokensPerSecond(outputTokens, generationMs, latencyMs) {
-  if (typeof outputTokens !== "number" || !Number.isFinite(outputTokens) || outputTokens <= 0) {
-    return undefined;
-  }
+// A first content delta this large a share of the whole answer means the
+// provider buffered the response instead of streaming it: the tokens arrived
+// together, so their generation time was never observable.
+export const FIRST_CHUNK_RATIO_LIMIT = 0.5;
 
-  const elapsedMs = typeof generationMs === "number" && Number.isFinite(generationMs) && generationMs >= 0
-    ? generationMs
-    : latencyMs;
-  if (typeof elapsedMs !== "number" || !Number.isFinite(elapsedMs) || elapsedMs < 0) {
-    return undefined;
-  }
+/**
+ * Streaming throughput measured between real content deltas.
+ *
+ * firstDeltaChars/totalOutputChars are raw character counts from the stream —
+ * the same scale, so their ratio is meaningful on its own. When the provider
+ * reports real outputTokens, the first chunk's share is applied to that number
+ * so the whole numerator stays in the provider's token scale.
+ *
+ * The first delta is excluded from the numerator: the provider may have spent
+ * seconds generating it before delivery, and that time is not in generationMs.
+ * Returns undefined when the sample cannot support a trustworthy number.
+ */
+export function calculateStreamTokensPerSecond(outputTokens, generationMs, contentDeltaCount, firstDeltaChars, totalOutputChars) {
+  const deltas = Number(contentDeltaCount);
+  if (!Number.isInteger(deltas) || deltas < 2) return undefined;
 
-  // Jan uses one second only when both updates happen in the same tick.
-  return outputTokens * 1000 / (elapsedMs === 0 ? 1000 : elapsedMs);
+  const elapsedMs = Number(generationMs);
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return undefined;
+
+  const chars = Number(totalOutputChars);
+  if (!Number.isFinite(chars) || chars <= 0) return undefined;
+
+  const firstChars = Number(firstDeltaChars);
+  if (!Number.isFinite(firstChars) || firstChars < 0) return undefined;
+
+  const firstChunkRatio = firstChars / chars;
+  if (firstChunkRatio >= FIRST_CHUNK_RATIO_LIMIT) return undefined;
+
+  const tokens = Number(outputTokens);
+  if (!Number.isFinite(tokens) || tokens <= 0) return undefined;
+
+  const generationTokens = tokens * (1 - firstChunkRatio);
+  if (generationTokens <= 0) return undefined;
+
+  return generationTokens * 1000 / elapsedMs;
 }
 
-function serializeUsageMeta(latencyMs, generationMs) {
+/**
+ * Entry point used when reading usage rows. `meta` is the parsed usage meta
+ * column ({ latencyMs, generationMs, contentDeltaCount, firstDeltaChars, totalOutputChars }).
+ */
+export function calculateTokensPerSecond(outputTokens, meta = {}) {
+  const tokens = Number(outputTokens);
+  if (!Number.isFinite(tokens) || tokens <= 0) return undefined;
+
+  // New streaming records carry contentDeltaCount; legacy rows don't. A legacy
+  // row with generationMs was streamed under the old timing, which could not
+  // tell a slow provider from a buffering one — hide it rather than resurrect
+  // the inflated number.
+  if (meta.contentDeltaCount !== undefined) {
+    return calculateStreamTokensPerSecond(tokens, meta.generationMs, meta.contentDeltaCount, meta.firstDeltaChars, meta.totalOutputChars);
+  }
+  if (meta.generationMs !== undefined) return undefined;
+
+  // Non-streaming has no first-token timestamp: the whole response arrives at
+  // once, so this is end-to-end throughput (prompt processing included), not
+  // pure generation speed. Same formula as before.
+  const elapsedMs = Number(meta.latencyMs);
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return undefined;
+
+  return tokens * 1000 / elapsedMs;
+}
+
+function serializeUsageMeta(latencyMs, generationMs, contentDeltaCount, firstDeltaChars, totalOutputChars) {
   const meta = {};
   if (typeof latencyMs === "number" && Number.isFinite(latencyMs) && latencyMs > 0) {
     meta.latencyMs = latencyMs;
   }
   if (typeof generationMs === "number" && Number.isFinite(generationMs) && generationMs >= 0) {
     meta.generationMs = generationMs;
+  }
+  if (Number.isInteger(contentDeltaCount) && contentDeltaCount >= 0) {
+    meta.contentDeltaCount = contentDeltaCount;
+  }
+  if (Number.isInteger(firstDeltaChars) && firstDeltaChars >= 0) {
+    meta.firstDeltaChars = firstDeltaChars;
+  }
+  if (Number.isInteger(totalOutputChars) && totalOutputChars > 0) {
+    meta.totalOutputChars = totalOutputChars;
+    // Diagnostic marker: the first chunk carried too much of the answer to
+    // trust the timing. Ratio is chars over chars — same scale, no conversion.
+    if (Number.isInteger(firstDeltaChars) && firstDeltaChars / totalOutputChars >= FIRST_CHUNK_RATIO_LIMIT) {
+      meta.buffered = true;
+    }
   }
   return stringifyJson(meta);
 }
@@ -207,7 +273,11 @@ async function ensureRingInitialized() {
         timestamp: r.timestamp, provider: r.provider, model: r.model, connectionId: r.connectionId,
         apiKey: r.apiKey, endpoint: r.endpoint, cost: r.cost, status: r.status,
         tokens: parseJson(r.tokens, {}),
-        latencyMs: meta.latencyMs, generationMs: meta.generationMs,
+        latencyMs: meta.latencyMs,
+        generationMs: meta.generationMs,
+        contentDeltaCount: meta.contentDeltaCount,
+        firstDeltaChars: meta.firstDeltaChars,
+        totalOutputChars: meta.totalOutputChars,
       };
     });
   } catch {}
@@ -291,8 +361,7 @@ export async function getActiveRequests(connectionMapOverride) {
         completionTokens: t.completion_tokens || t.output_tokens || 0,
         tokensPerSecond: calculateTokensPerSecond(
           t.completion_tokens || t.output_tokens || 0,
-          e.generationMs,
-          e.latencyMs
+          { latencyMs: e.latencyMs, generationMs: e.generationMs, contentDeltaCount: e.contentDeltaCount, firstDeltaChars: e.firstDeltaChars, totalOutputChars: e.totalOutputChars }
         ),
         status: e.status || "ok",
       };
@@ -357,7 +426,7 @@ export async function saveRequestUsage(entry) {
           entry.timestamp, entry.provider || null, entry.model || null,
           entry.connectionId || null, entry.apiKey || null, entry.endpoint || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
-          stringifyJson(tokens), serializeUsageMeta(entry.latencyMs, entry.generationMs),
+          stringifyJson(tokens), serializeUsageMeta(entry.latencyMs, entry.generationMs, entry.contentDeltaCount, entry.firstDeltaChars, entry.totalOutputChars),
         ]
       );
 
@@ -449,14 +518,12 @@ export async function getUsageStats(period = "all") {
       const t = parseJson(r.tokens, {}) || {};
       const completionTokens = t.completion_tokens || t.output_tokens || 0;
       const meta = parseJson(r.meta, {}) || {};
-      const latencyMs = meta.latencyMs;
-      const generationMs = meta.generationMs;
       return {
         timestamp: r.timestamp, model: r.model, provider: r.provider || "",
         promptTokens: t.prompt_tokens || t.input_tokens || 0,
         completionTokens,
         cachedTokens: t.cached_tokens || t.cache_read_input_tokens || 0,
-        tokensPerSecond: calculateTokensPerSecond(completionTokens, generationMs, latencyMs),
+        tokensPerSecond: calculateTokensPerSecond(completionTokens, meta),
         status: r.status || "ok",
       };
     })

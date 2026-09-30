@@ -101,9 +101,138 @@ describe("stream generation timing", () => {
     await drain;
 
     expect(onStreamComplete).toHaveBeenCalledTimes(1);
-    const [, , ttftAt, generationStartAt] = onStreamComplete.mock.calls[0];
+    const [, , ttftAt, timing] = onStreamComplete.mock.calls[0];
     expect(ttftAt).toBe(new Date("2026-09-07T12:00:00.000Z").getTime());
-    expect(generationStartAt).toBe(new Date("2026-09-07T12:00:00.500Z").getTime());
+    // Timing starts on the first real content delta, not on the role-only chunk.
+    expect(timing.firstContentAt).toBe(new Date("2026-09-07T12:00:00.500Z").getTime());
+    expect(timing.lastContentAt).toBe(new Date("2026-09-07T12:00:00.500Z").getTime());
+    expect(timing.contentDeltaCount).toBe(1);
+    expect(timing.firstDeltaChars).toBe(5); // "hello"
+    expect(timing.totalOutputChars).toBe(5);
+    vi.useRealTimers();
+  });
+
+  it("ends the window at the last content delta, not at the usage/finish chunk", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-07T12:00:00.000Z"));
+    const onStreamComplete = vi.fn();
+    const encoder = new TextEncoder();
+    const transform = createSSETransformStreamWithLogger(
+      FORMATS.OPENAI,
+      FORMATS.OPENAI,
+      "openai",
+      null,
+      null,
+      "gpt-4o",
+      null,
+      null,
+      onStreamComplete,
+    );
+    const writer = transform.writable.getWriter();
+    const reader = transform.readable.getReader();
+    const drain = (async () => {
+      for (;;) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    })();
+
+    await writer.write(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "a" } }] })}\n\n`));
+    vi.advanceTimersByTime(2000);
+    await writer.write(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "b" } }] })}\n\n`));
+    // A long gap before the terminal metadata chunk: it must not inflate the window.
+    vi.advanceTimersByTime(9000);
+    await writer.write(encoder.encode(`data: ${JSON.stringify({ choices: [{ finish_reason: "stop", delta: {} }], usage: { prompt_tokens: 1, completion_tokens: 2 } })}\n\n`));
+    await writer.close();
+    await drain;
+
+    const [, , , timing] = onStreamComplete.mock.calls[0];
+    expect(timing.contentDeltaCount).toBe(2);
+    expect(timing.lastContentAt - timing.firstContentAt).toBe(2000);
+    expect(timing.totalOutputChars).toBe(2);
+    vi.useRealTimers();
+  });
+
+  it("counts one multi-part Gemini event as a single content delta", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-07T12:00:00.000Z"));
+    const onStreamComplete = vi.fn();
+    const encoder = new TextEncoder();
+    const transform = createSSETransformStreamWithLogger(
+      FORMATS.GEMINI,
+      FORMATS.OPENAI,
+      "gemini",
+      null,
+      null,
+      "gemini-3-pro",
+      null,
+      null,
+      onStreamComplete,
+    );
+
+    const writer = transform.writable.getWriter();
+    const reader = transform.readable.getReader();
+    const drain = (async () => {
+      for (;;) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    })();
+
+    // One SSE event carrying three text parts — a buffered provider must not be
+    // able to disguise this as three healthy deltas.
+    await writer.write(encoder.encode(
+      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "aa" }, { text: "bb" }, { text: "cc" }] } }] })}\n\n`,
+    ));
+    vi.advanceTimersByTime(1000);
+    await writer.write(encoder.encode(
+      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "dd" }] } }] })}\n\n`,
+    ));
+    await writer.close();
+    await drain;
+
+    const [, , , timing] = onStreamComplete.mock.calls[0];
+    expect(timing.contentDeltaCount).toBe(2);
+    expect(timing.firstDeltaChars).toBe(6); // all three parts are one event
+    expect(timing.totalOutputChars).toBe(8);
+    vi.useRealTimers();
+  });
+
+  it("counts content and reasoning in one OpenAI event as a single delta", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-07T12:00:00.000Z"));
+    const onStreamComplete = vi.fn();
+    const encoder = new TextEncoder();
+    const transform = createSSETransformStreamWithLogger(
+      FORMATS.OPENAI,
+      FORMATS.OPENAI,
+      "openai",
+      null,
+      null,
+      "gpt-4o",
+      null,
+      null,
+      onStreamComplete,
+    );
+    const writer = transform.writable.getWriter();
+    const reader = transform.readable.getReader();
+    const drain = (async () => {
+      for (;;) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    })();
+
+    await writer.write(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "hi", reasoning_content: "why" } }] })}\n\n`));
+    vi.advanceTimersByTime(500);
+    await writer.write(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "there" } }] })}\n\n`));
+    await writer.close();
+    await drain;
+
+    const [, , , timing] = onStreamComplete.mock.calls[0];
+    expect(timing.contentDeltaCount).toBe(2);
+    expect(timing.firstDeltaChars).toBe(5); // "hi" + "why"
+    expect(timing.totalOutputChars).toBe(10); // + "there"
     vi.useRealTimers();
   });
 
@@ -136,8 +265,9 @@ describe("stream generation timing", () => {
     await drain;
 
     expect(onStreamComplete).toHaveBeenCalledTimes(1);
-    const [, , , generationStartAt] = onStreamComplete.mock.calls[0];
-    expect(generationStartAt).toBe(new Date("2026-09-07T12:00:00.400Z").getTime());
+    const [, , , timing] = onStreamComplete.mock.calls[0];
+    expect(timing.firstContentAt).toBe(new Date("2026-09-07T12:00:00.400Z").getTime());
+    expect(timing.contentDeltaCount).toBe(1);
     vi.useRealTimers();
   });
 });
