@@ -104,7 +104,7 @@ describe("refreshAccessToken — config-driven profiles", () => {
 });
 describe("Cline refresh", () => {
   beforeEach(() => { vi.clearAllMocks(); vi.resetModules(); global.fetch = originalFetch; });
-  afterEach(() => { global.fetch = originalFetch; });
+  afterEach(() => { vi.restoreAllMocks(); global.fetch = originalFetch; });
 
   it("uses the extension JSON refresh contract", async () => {
     const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();
@@ -135,5 +135,63 @@ describe("Cline refresh", () => {
     expect(out.accessToken).toBe("cline-acc");
     expect(out.refreshToken).toBe("cline-rot");
     expect(out.expiresIn).toBeGreaterThan(0);
+  });
+
+  // Cline's refresh endpoint fails intermittently; the service retries 3x with 5s between tries.
+  function mockFetchSequence(responses) {
+    let i = 0;
+    const fn = vi.fn().mockImplementation(() => {
+      const spec = responses[Math.min(i, responses.length - 1)];
+      i++;
+      return Promise.resolve({
+        ok: spec.ok !== false,
+        status: spec.status || 200,
+        json: () => Promise.resolve(spec.body),
+        text: () => Promise.resolve(JSON.stringify(spec.body)),
+      });
+    });
+    global.fetch = fn;
+    return fn;
+  }
+
+  it("retries after a transient failure and succeeds", async () => {
+    const setTimeoutSpy = vi
+      .spyOn(global, "setTimeout")
+      .mockImplementation((cb) => { cb(); return 0; });
+    const fm = mockFetchSequence([
+      { ok: false, status: 500, body: { error: "boom" } },
+      { ok: false, status: 503, body: { error: "unavailable" } },
+      { ok: true, body: { data: { accessToken: "cline-retry-acc", refreshToken: "cline-rot" } } },
+    ]);
+    const { refreshTokenByProvider } = await import(
+      "open-sse/services/tokenRefresh.js"
+    );
+
+    const out = await refreshTokenByProvider(
+      "cline",
+      { refreshToken: "cline-retry-old" },
+      console
+    );
+
+    expect(fm).toHaveBeenCalledTimes(3);
+    expect(setTimeoutSpy.mock.calls.filter(([, ms]) => ms === 5000)).toHaveLength(2);
+    expect(out.accessToken).toBe("cline-retry-acc");
+  });
+
+  it("gives up after 3 failed attempts", async () => {
+    vi.spyOn(global, "setTimeout").mockImplementation((cb) => { cb(); return 0; });
+    const fm = mockFetchSequence([{ ok: false, status: 500, body: { error: "boom" } }]);
+    const { refreshTokenByProvider } = await import(
+      "open-sse/services/tokenRefresh.js"
+    );
+
+    const out = await refreshTokenByProvider(
+      "cline",
+      { refreshToken: "cline-dead" },
+      console
+    );
+
+    expect(fm).toHaveBeenCalledTimes(3);
+    expect(out).toBeNull();
   });
 });

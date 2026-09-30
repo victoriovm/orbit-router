@@ -147,50 +147,64 @@ export async function refreshKimiToken(refreshToken, credentials, log) {
   return refreshAccessToken("kimi", refreshToken, credentials, log);
 }
 
+// Cline's auth endpoint fails intermittently, so retry before giving up.
+const CLINE_REFRESH_ATTEMPTS = 3;
+const CLINE_REFRESH_RETRY_DELAY_MS = 5000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function refreshClineToken(refreshToken, log) {
   if (!refreshToken) return null;
 
   return dedupRefresh("cline", refreshToken, async () => {
-    try {
-      const response = await fetch(PROVIDERS.cline?.refreshUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({
-          refreshToken,
-          grantType: "refresh_token",
-          clientType: "extension",
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        log?.error?.("TOKEN_REFRESH", "Failed to refresh Cline token", {
-          status: response.status,
-          error: errorText,
+    for (let attempt = 1; attempt <= CLINE_REFRESH_ATTEMPTS; attempt++) {
+      try {
+        const response = await fetch(PROVIDERS.cline?.refreshUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            refreshToken,
+            grantType: "refresh_token",
+            clientType: "extension",
+          }),
         });
-        return null;
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          log?.error?.("TOKEN_REFRESH", `Failed to refresh Cline token (attempt ${attempt}/${CLINE_REFRESH_ATTEMPTS})`, {
+            status: response.status,
+            error: errorText,
+          });
+        } else {
+          const body = await response.json();
+          const tokens = body?.data || body;
+          if (!tokens?.accessToken) {
+            log?.error?.("TOKEN_REFRESH", `Cline token refresh returned no access token (attempt ${attempt}/${CLINE_REFRESH_ATTEMPTS})`);
+          } else {
+            const expiresIn = tokens.expiresAt
+              ? Math.max(1, Math.floor((new Date(tokens.expiresAt).getTime() - Date.now()) / 1000))
+              : (tokens.expiresIn || tokens.expires_in || 3600);
+
+            return {
+              accessToken: tokens.accessToken,
+              refreshToken: tokens.refreshToken || refreshToken,
+              expiresIn,
+            };
+          }
+        }
+      } catch (error) {
+        log?.error?.("TOKEN_REFRESH", `Error refreshing Cline token (attempt ${attempt}/${CLINE_REFRESH_ATTEMPTS}): ${error.message}`);
       }
 
-      const body = await response.json();
-      const tokens = body?.data || body;
-      if (!tokens?.accessToken) return null;
-
-      const expiresIn = tokens.expiresAt
-        ? Math.max(1, Math.floor((new Date(tokens.expiresAt).getTime() - Date.now()) / 1000))
-        : (tokens.expiresIn || tokens.expires_in || 3600);
-
-      return {
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken || refreshToken,
-        expiresIn,
-      };
-    } catch (error) {
-      log?.error?.("TOKEN_REFRESH", `Error refreshing Cline token: ${error.message}`);
-      return null;
+      if (attempt < CLINE_REFRESH_ATTEMPTS) {
+        await sleep(CLINE_REFRESH_RETRY_DELAY_MS);
+      }
     }
+
+    return null;
   }, log);
 }
 
