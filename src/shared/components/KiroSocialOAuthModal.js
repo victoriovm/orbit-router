@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
 import { Modal, Button, Input } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
@@ -16,12 +16,6 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
   const [callbackUrl, setCallbackUrl] = useState("");
   const [error, setError] = useState(null);
   const { copied, copy } = useCopyToClipboard();
-  const openedRef = useRef(false);
-
-  // Reset auto-open guard when modal closes so it can re-open next session.
-  useEffect(() => {
-    if (!isOpen) openedRef.current = false;
-  }, [isOpen]);
 
   // Initialize auth flow
   useEffect(() => {
@@ -42,12 +36,6 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
         setAuthData(data);
         setAuthUrl(data.authUrl);
         setStep("input");
-
-        // Auto-open browser once per modal session.
-        if (!openedRef.current) {
-          openedRef.current = true;
-          window.open(data.authUrl, "_blank", "noopener,noreferrer");
-        }
       } catch (err) {
         setError(err.message);
         setStep("error");
@@ -134,12 +122,24 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
                   <Input value={authUrl} readOnly className="flex-1 font-mono text-xs" />
                   <Button 
                     variant="secondary" 
+                    className="!h-auto"
                     icon={copied === "auth_url" ? "check" : "content_copy"} 
                     onClick={() => copy(authUrl, "auth_url")}
                   >
                     Copy
                   </Button>
                 </div>
+                {authUrl && (
+                  <Button
+                    variant="secondary"
+                    className="mt-2"
+                    icon="open_in_new"
+                    onClick={() => window.open(authUrl, "_blank", "noopener,noreferrer")}
+                    fullWidth
+                  >
+                    Open authorization page
+                  </Button>
+                )}
               </div>
 
               <div>

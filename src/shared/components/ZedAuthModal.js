@@ -18,7 +18,6 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
   const [callbackUrl, setCallbackUrl] = useState("");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  const popupRef = useRef(null);
   const flowRef = useRef({ proxyStarted: false, stopSent: false });
   const openedRef = useRef(false);
   const pollAbortRef = useRef(false);
@@ -129,7 +128,6 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
 
       setAuthData(nextAuth);
       setPhase((prev) => (prev === "ide-found" || prev === "importing" ? prev : "browser"));
-      popupRef.current = window.open(nextAuth.authUrl, "oauth_popup_zed", "width=600,height=700");
     } catch (err) {
       if (!isOpenRef.current) return;
       setError(err.message);
@@ -196,13 +194,6 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
     pollAbortRef.current = true;
     stopOwnedProxy();
     flowRef.current = { proxyStarted: false, stopSent: false };
-    if (popupRef.current && !popupRef.current.closed) {
-      try {
-        popupRef.current.close();
-      } catch {
-        // ignore
-      }
-    }
   }, [isOpen, stopOwnedProxy]);
 
   // Poll proxy until browser OAuth completes
@@ -333,12 +324,15 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
 
         {showBrowserUi && (
           <>
-            <div className="flex items-center gap-2 px-3 py-2 border border-border rounded-lg bg-sidebar/50">
-              <span className="material-symbols-outlined text-base text-primary animate-spin">
-                progress_activity
-              </span>
-              <span className="text-sm">Waiting for popup authorization…</span>
-            </div>
+            <Button
+              variant="secondary"
+              icon="open_in_new"
+              onClick={() => window.open(authData?.authUrl, "_blank", "noopener,noreferrer")}
+              disabled={!authData?.authUrl}
+              fullWidth
+            >
+              Open authorization page
+            </Button>
 
             <div className="flex items-center gap-3 my-1">
               <div className="flex-1 h-px bg-border" />
@@ -359,6 +353,7 @@ export default function ZedAuthModal({ isOpen, providerInfo, onSuccess, onClose 
                   />
                   <Button
                     variant="secondary"
+                    className="!h-auto"
                     icon={copied === "auth_url" ? "check" : "content_copy"}
                     onClick={() => copy(authData?.authUrl, "auth_url")}
                     disabled={!authData?.authUrl}

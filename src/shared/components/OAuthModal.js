@@ -6,7 +6,7 @@ import { Modal, Button, Input } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 
 // Providers using the dynamic-port local callback proxy.
-// Browser OAuth: popup → auto callback → auto exchange → poll-status.
+// Browser OAuth: user opens the authorize page → auto callback → auto exchange → poll-status.
 const PROXY_OAUTH_PROVIDERS = new Set(["trae", "windsurf", "zed"]);
 
 // Providers offering a paste-token fallback (import-token flow).
@@ -32,8 +32,8 @@ const PASTE_TOKEN_PROVIDERS = {
 
 /**
  * OAuth Modal Component
- * - Localhost: Auto callback via popup message
- * - Remote: Manual paste callback URL
+ * The user opens the authorization page manually (button); the callback then
+ * arrives via postMessage / BroadcastChannel / localStorage, or via manual paste.
  */
 export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, onClose, oauthMeta, idcConfig }) {
   const [step, setStep] = useState("waiting"); // waiting | input | success | error
@@ -47,7 +47,6 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   const [authMode, setAuthMode] = useState("browser"); // "browser" | "paste-token"
   const [pasteToken, setPasteToken] = useState("");
   const [ideStatus, setIdeStatus] = useState(null);
-  const popupRef = useRef(null);
   const pollingAbortRef = useRef(false);
   const openedRef = useRef(false);
   // Proxy-flow session ledger: which provider's proxy THIS modal session
@@ -257,11 +256,10 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       throw new Error(regData?.error || "Failed to register login session; please retry");
     }
     if (!isOpenRef.current) return; // closed mid-flight: close effect owns cleanup now
-    // 4. Open popup; proxy auto-exchanges on callback, modal polls poll-status.
+    // 4. Expose the authorize URL; the user opens it from the waiting card while
+    // the proxy auto-exchanges on callback and the modal polls poll-status.
     setAuthData({ ...authData, proxyProvider: providerId });
     setStep("waiting");
-    popupRef.current = window.open(authData.authUrl, "oauth_popup", "width=600,height=700");
-    if (!popupRef.current) setStep("input"); // popup blocked → fall back to manual paste
   }, [stopOwnedProxy]);
 
   // Start OAuth flow (plain function by design: it is only invoked from the
@@ -310,10 +308,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 
         setDeviceData(data);
 
-        // Auto-open verification URL in new tab
-        const verifyUrl = data.verification_uri_complete || data.verification_uri;
-        if (verifyUrl) window.open(verifyUrl, "_blank", "noopener,noreferrer");
-
+        // Surface the verification URL as a manual "Open" action (no auto-open).
         // Pass extraData for Kiro (contains _clientId, _clientSecret) and
         // Qoder (contains _qoderMachineId / _qoderNonce — needed so mapTokens
         // can persist the machine id alongside the token).
@@ -433,29 +428,17 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       }
 
       if (provider === "codex" && codexProxyActive) {
-        // Proxy active: callback will be handled server-side (auto-exchange) or via channels (fallback)
+        // Proxy active: callback is handled server-side (auto-exchange) or via
+        // channels (fallback). The user opens the authorize URL from the card.
         setStep("waiting");
-        popupRef.current = window.open(data.authUrl, "oauth_popup", "width=600,height=700");
-        if (!popupRef.current) {
-          setStep("input");
-        }
       } else if (provider === "xai" && xaiProxyActive) {
         setStep("waiting");
-        popupRef.current = window.open(data.authUrl, "oauth_popup", "width=600,height=700");
-        if (!popupRef.current) {
-          setStep("input");
-        }
       } else if (!isLocalhost || provider === "codex" || provider === "xai") {
         // Non-localhost or proxy failed: manual input mode
         setStep("input");
-        window.open(data.authUrl, "_blank", "noopener,noreferrer");
       } else {
-        // Localhost (non-Codex/xAI): Open popup and wait for message
+        // Localhost (non-Codex/xAI): callback returns to this app via channels
         setStep("waiting");
-        popupRef.current = window.open(data.authUrl, "oauth_popup", "width=600,height=700");
-        if (!popupRef.current) {
-          setStep("input");
-        }
       }
     } catch (err) {
       setError(err.message);
@@ -666,7 +649,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 
       const input = callbackUrl.trim();
 
-      // Trae/Windsurf/Zed proxy flow fallback (popup blocked): paste the full callback URL
+      // Trae/Windsurf/Zed proxy flow fallback: paste the full callback URL
       if (PROXY_OAUTH_PROVIDERS.has(provider) && input) {
         const res = await fetch(`/api/oauth/${provider}/exchange`, {
           method: "POST",
@@ -778,15 +761,25 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
             {authMode === "browser" && (
               <>
                 {step === "waiting" && (
-                  <div className="flex items-center gap-2 px-3 py-2 border border-border rounded-lg bg-sidebar/50">
-                    <span className="material-symbols-outlined text-base text-primary animate-spin">progress_activity</span>
-                    <span className="text-sm">Waiting for browser authorization…</span>
+                  <div className="space-y-3">
+                    <Button
+                      variant="secondary"
+                      icon="open_in_new"
+                      onClick={() => window.open(authData?.authUrl, "_blank", "noopener,noreferrer")}
+                      disabled={!authData?.authUrl}
+                      fullWidth
+                    >
+                      Open authorization page
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setStep("input")} fullWidth>
+                      Paste callback URL instead
+                    </Button>
                   </div>
                 )}
                 {step === "input" && (
                   <div className="space-y-3">
                     <p className="text-sm text-text-muted">
-                      Popup was blocked. After authorizing in the browser, paste the full callback URL here:
+                      After authorizing in the browser, paste the full callback URL here:
                     </p>
                     <Input
                       value={callbackUrl}
@@ -832,15 +825,16 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         {/* Waiting + Manual Input combined (non-device-code, non-proxy) */}
         {(step === "waiting" || step === "input") && !isDeviceCode && !PROXY_OAUTH_PROVIDERS.has(provider) && (
           <>
-            {/* Option A: Auto via popup */}
-            <div className="flex items-center gap-2 px-3 py-2 border border-border rounded-lg bg-sidebar/50">
-              <span className="material-symbols-outlined text-base text-primary animate-spin">
-                progress_activity
-              </span>
-              <span className="text-sm">
-                {isXaiProvider ? "Waiting for Grok Build OAuth…" : "Waiting for popup authorization…"}
-              </span>
-            </div>
+            {/* Option A: open the authorization page manually */}
+            <Button
+              variant="secondary"
+              icon="open_in_new"
+              onClick={() => window.open(authData?.authUrl, "_blank", "noopener,noreferrer")}
+              disabled={!authData?.authUrl}
+              fullWidth
+            >
+              {isXaiProvider ? "Open Grok Build OAuth page" : "Open authorization page"}
+            </Button>
 
             {/* Divider */}
             <div className="flex items-center gap-3 my-1">
@@ -857,7 +851,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
                 </p>
                 <div className="flex gap-2">
                   <Input value={authData?.authUrl || ""} readOnly className="flex-1 font-mono text-xs" />
-                  <Button variant="secondary" icon={copied === "auth_url" ? "check" : "content_copy"} onClick={() => copy(authData?.authUrl, "auth_url")} disabled={!authData?.authUrl}>
+                  <Button variant="secondary" className="!h-auto" icon={copied === "auth_url" ? "check" : "content_copy"} onClick={() => copy(authData?.authUrl, "auth_url")} disabled={!authData?.authUrl}>
                     Copy
                   </Button>
                 </div>

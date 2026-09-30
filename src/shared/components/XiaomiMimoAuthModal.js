@@ -142,7 +142,6 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
       const data = await res.json();
       if (!res.ok || !data.pageUrl) throw new Error(data.error || "Failed to start login");
       setSessPageUrl(data.pageUrl);
-      window.open(data.pageUrl, "mimo-session-login", "width=500,height=760");
       setSessPolling(true);
       const startedAt = Date.now();
       sessTimerRef.current = setInterval(async () => {
@@ -207,11 +206,12 @@ export default function XiaomiMimoAuthModal({ isOpen, onSuccess, onClose }) {
           {sessPageUrl && (
             <Button
               onClick={() => window.open(sessPageUrl, "mimo-session-login", "width=500,height=760")}
-              variant="ghost"
+              variant="outline"
               size="sm"
+              icon="open_in_new"
               fullWidth
             >
-              Reopen login window
+              Open login page
             </Button>
           )}
         </div>
