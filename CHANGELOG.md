@@ -1,6 +1,7 @@
 # v0.5.91 (2026-09-26)
 
 ## Features
+- **Providers**: add RunAnywhere (Wally) provider, a hosted OpenAI-compatible endpoint at `inference.runanywhere.ai/v1` with per-key model discovery
 - **Providers**: add Token Harbor provider and four OpenAI-compatible aggregator providers (dahl, atria, agnes, bai)
 - **Claude**: forward `x-claude-code-session-id` on OAuth requests; merge client `anthropic-beta` flags and forward rate-limit headers; return thinking text to OpenAI-format clients
 - **Codex**: add GPT-6 Sol and Luna support

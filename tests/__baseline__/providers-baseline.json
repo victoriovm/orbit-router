@@ -1147,5 +1147,13 @@
       "429": 2
     },
     "format": "openai"
+  },
+  "runanywhere": {
+    "baseUrl": "https://inference.runanywhere.ai/v1/chat/completions",
+    "validateUrl": "https://inference.runanywhere.ai/v1/models",
+    "retry": {
+      "429": 2
+    },
+    "format": "openai"
   }
 }
