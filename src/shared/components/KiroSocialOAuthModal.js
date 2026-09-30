@@ -17,8 +17,6 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
   const [error, setError] = useState(null);
   const { copied, copy } = useCopyToClipboard();
   const openedRef = useRef(false);
-  const [inlineAuthOpen, setInlineAuthOpen] = useState(false);
-  const [inlineUrl, setInlineUrl] = useState("");
 
   // Reset auto-open guard when modal closes so it can re-open next session.
   useEffect(() => {
@@ -48,7 +46,7 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
         // Auto-open browser once per modal session.
         if (!openedRef.current) {
           openedRef.current = true;
-          setInlineUrl(data.authUrl); setInlineAuthOpen(true);
+          window.open(data.authUrl, "_blank", "noopener,noreferrer");
         }
       } catch (err) {
         setError(err.message);
@@ -109,8 +107,7 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
   const providerName = provider === "google" ? "Google" : "GitHub";
 
   return (
-    <>
-      <Modal isOpen={isOpen} title={`Connect Kiro via ${providerName}`} onClose={onClose} size="lg">
+    <Modal isOpen={isOpen} title={`Connect Kiro via ${providerName}`} onClose={onClose} size="lg">
       <div className="flex flex-col gap-4">
         {/* Loading */}
         {step === "loading" && (
@@ -206,25 +203,6 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
         )}
       </div>
     </Modal>
-      {inlineAuthOpen && (
-        <Modal isOpen={inlineAuthOpen} onClose={() => setInlineAuthOpen(false)} title={`Authorize via ${providerName}`} size="xl">
-          <div className="flex flex-col gap-3">
-            <p className="text-xs text-text-muted">Authorization opened as a site popup. If it does not load, use the button below.</p>
-            <div className="overflow-hidden rounded-xl border border-border bg-bg">
-              {inlineUrl ? (
-                <iframe src={inlineUrl} className="h-[68vh] w-full border-0" title="OAuth Authorization" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
-              ) : (
-                <div className="flex h-[68vh] items-center justify-center p-6 text-sm text-text-muted">No authorization URL</div>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <Button variant="secondary" icon="open_in_new" onClick={() => window.open(inlineUrl, "_blank", "noopener,noreferrer")} fullWidth>Open in new tab</Button>
-              <Button variant="ghost" onClick={() => setInlineAuthOpen(false)} fullWidth>Close</Button>
-            </div>
-          </div>
-        </Modal>
-      )}
-    </>
   );
 }
 
