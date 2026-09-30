@@ -238,7 +238,7 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
         {showMenuButton && (
           <button
             onClick={onMenuClick}
-            className="text-text-main hover:text-primary transition-colors"
+            className="flex items-center justify-center text-text-main hover:text-primary transition-colors"
           >
             <span className="material-symbols-outlined">menu</span>
           </button>
