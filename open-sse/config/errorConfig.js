@@ -63,6 +63,7 @@ export const ERROR_RULES = [
   // The requested model simply isn't deployed on the account: switching accounts
   // cannot help, and locking them would turn a client typo into an outage.
   { text: "is not served by any configured endpoint", noFallback: true },
+  { provider: "codex", text: "model is not supported when using codex with a chatgpt account", cooldownMs: MAX_RATE_LIMIT_COOLDOWN_MS },
   { text: "no credentials",           cooldownMs: COOLDOWN.long },
   { text: "request not allowed",      cooldownMs: COOLDOWN.short },
   { text: "improperly formed request", cooldownMs: COOLDOWN.long },

@@ -126,7 +126,15 @@
     "vultr": "vultr",
     "nov": "novita",
     "novita": "novita",
-    "modal": "modal"
+    "modal": "modal",
+    "muse": "muse",
+    "muse-ai": "muse",
+    "meta-model-api": "muse",
+    "muse-code": "muse",
+    "muse-subscription": "muse",
+    "tinyfish": "tinyfish",
+    "v1m": "v1m",
+    "runanywhere": "runanywhere"
   },
   "idToAlias": {
     "agnes": "agnes",
@@ -188,6 +196,7 @@
     "mmf": "mmf",
     "modal": "modal",
     "morph": "morph",
+    "muse": "muse",
     "nanobanana": "nanobanana",
     "nebius": "nebius",
     "novita": "nov",
@@ -228,6 +237,7 @@
   "modelKeys": [
     "af",
     "ag",
+    "agnes",
     "alicode",
     "alicode-intl",
     "alims-intl",
@@ -289,6 +299,7 @@
     "mmf",
     "modal",
     "morph",
+    "muse",
     "nanobanana",
     "nebius",
     "nov",
@@ -324,6 +335,7 @@
     "together",
     "tokenharbor",
     "tokenrouter",
+    "v1m",
     "vc",
     "venice",
     "vertex",
