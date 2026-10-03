@@ -95,21 +95,21 @@ export default function DashboardLayout({ children }) {
       )}
 
       {/* Sidebar - Desktop */}
-      <div className="hidden lg:flex">
+      <div className="hidden shrink-0 self-stretch py-0 pl-0 lg:flex">
         <Sidebar />
       </div>
 
       {/* Sidebar - Mobile */}
       <div
-        className={`fixed inset-y-0 left-0 z-50 transform lg:hidden transition-transform duration-300 ease-in-out ${
+        className={`fixed inset-y-0 left-0 z-50 transform py-0 pl-0 lg:hidden transition-transform duration-300 ease-in-out ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         <Sidebar onClose={() => setSidebarOpen(false)} />
       </div>
 
-      {/* Main content */}
-      <main className="flex flex-col flex-1 h-full min-w-0 relative transition-colors duration-300 isolate">
+      {/* Main content - floating card */}
+      <main className="relative isolate m-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border-subtle bg-bg shadow-[var(--shadow-elev)] transition-colors duration-300 lg:m-4 lg:ml-0">
         {/* Faint grid background */}
         <div className="landing-grid absolute inset-0 pointer-events-none -z-10" aria-hidden="true" />
         <Header key={pathname} onMenuClick={() => setSidebarOpen(true)} />

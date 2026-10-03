@@ -64,7 +64,7 @@ const isActive = (href) => {
 
   return (
     <>
-      <aside className="flex w-72 flex-col border-r border-border-subtle bg-vibrancy backdrop-blur-xl transition-colors duration-300 min-h-full">
+      <aside className="m-3 flex h-[calc(100%-1.5rem)] w-72 flex-col overflow-hidden rounded-2xl border border-border-subtle bg-vibrancy shadow-[var(--shadow-elev)] backdrop-blur-xl transition-colors duration-300 lg:m-4 lg:h-[calc(100%-2rem)]">
         {/* Logo */}
         <div className="px-6 py-4 flex flex-col gap-2">
           <Link href="/dashboard" className="flex items-center gap-3">
