@@ -4,7 +4,7 @@ export default {
   alias: "cl",
   uiAlias: "cl",
   display: {
-    name: "Cline",
+    name: "Cline Free",
     icon: "smart_toy",
     color: "#5B9BD5",
     textIcon: "CL",
@@ -13,7 +13,7 @@ export default {
       signupUrl: "https://cline.bot",
     },
   },
-  category: "oauth",
+  category: "freeTier",
   authModes: ["oauth"],
   hasOAuth: true,
   transport: {
@@ -35,16 +35,11 @@ export default {
       ],
     },
   },
-  models: [
-    { id: "anthropic/claude-opus-4.7", name: "Claude Opus 4.7" },
-    { id: "anthropic/claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
-    { id: "anthropic/claude-opus-4.6", name: "Claude Opus 4.6" },
-    { id: "openai/gpt-5.3-codex", name: "GPT-5.3 Codex" },
-    { id: "openai/gpt-5.4", name: "GPT-5.4" },
-    { id: "google/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" },
-    { id: "google/gemini-3.1-flash-lite-preview", name: "Gemini 3.1 Flash Lite Preview" },
-    { id: "kwaipilot/kat-coder-pro", name: "KAT Coder Pro" },
-  ],
+  // No static model list: the free-tier catalog rotates and is assembled live
+  // from the two public feeds (see resolveClineModels), so a frozen list would
+  // only go stale. Routing accepts any id because getModelUpstreamId falls back
+  // to the raw id, and the picker/detail page read the live catalog.
+  models: [],
   oauth: {
     appBaseUrl: "https://app.cline.bot",
     apiBaseUrl: "https://api.cline.bot",

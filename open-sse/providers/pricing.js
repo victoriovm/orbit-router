@@ -2,27 +2,33 @@
 //
 // Fallback order (first match wins):
 //   1. PROVIDER_PRICING[provider][model]  — provider-specific override
-//   2. FREE_MODEL_NAMESPACES               — upstream bills these at $0
+//   2. FREE_MODEL_NAMESPACES / suffixes    — upstream bills these at $0
 //   3. MODEL_PRICING[model]               — canonical model price (provider-agnostic)
 //   4. PATTERN_PRICING                    — glob pattern match (e.g. "codex-*")
 
 /**
- * Namespaces upstream meters at $0. A free model must never inherit a paid
- * rate: the vendor-prefix strip in getPricingForModel() would turn
- * "cline-free/deepseek-v4.1-flash" into "deepseek-v4.1-flash" and match
- * MODEL_PRICING, so the namespace is checked before both fallbacks.
+ * Namespaces and id suffixes upstream meters at $0. A free model must never
+ * inherit a paid rate: the vendor-prefix strip in getPricingForModel() would
+ * turn "cline-free/deepseek-v4.1-flash" into "deepseek-v4.1-flash" and match
+ * MODEL_PRICING (and the bare id of "qwen/qwen3.8-27b:free" would match
+ * PATTERN_PRICING), so free markers are checked before both fallbacks.
+ * Suffix forms come from OpenRouter-style catalogs (Cline Free: `:free`).
  */
 export const FREE_MODEL_NAMESPACES = ["cline-free/"];
+export const FREE_MODEL_SUFFIXES = [":free"];
 
 export const ZERO_PRICING = {
   input: 0, output: 0, cached: 0, reasoning: 0, cache_creation: 0,
 };
 
-/** True when the model id sits in a namespace upstream bills at $0. */
+/** True when the model id sits in a namespace or suffix upstream bills at $0. */
 export function isFreeModel(model) {
   if (!model) return false;
   const lower = String(model).toLowerCase();
-  return FREE_MODEL_NAMESPACES.some((ns) => lower.startsWith(ns));
+  return (
+    FREE_MODEL_NAMESPACES.some((ns) => lower.startsWith(ns)) ||
+    FREE_MODEL_SUFFIXES.some((suffix) => lower.endsWith(suffix))
+  );
 }
 
 /**
@@ -399,7 +405,7 @@ export function matchPattern(pattern, model) {
 /**
  * Resolve pricing for a model using the 4-step fallback chain:
  *   1. PROVIDER_PRICING[provider][model]
- *   2. free namespace (upstream bills $0)
+ *   2. free namespace/suffix (upstream bills $0)
  *   3. MODEL_PRICING[model]
  *   4. PATTERN_PRICING (glob match)
  *

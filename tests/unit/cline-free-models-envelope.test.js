@@ -207,8 +207,10 @@ describe("cline free-models envelope in nonStreamingHandler", () => {
   });
 });
 
-describe("cline /api/v1/models aggregation (resolveClineModels vs resolveClinepassModels)", () => {
+describe("cline model aggregation (resolveClineModels vs resolveClinepassModels)", () => {
   const API_MODELS_URL = "https://api.cline.bot/api/v1/models";
+  const FREE_CATALOG_URL = "https://api.cline.bot/api/v1/ai/cline/models";
+  const FREE_FEED_URL = "https://api.cline.bot/api/v1/ai/cline/recommended-models";
 
   const API_RESPONSE = [
     { id: "cline-pass/deepseek-v4-flash", name: "DeepSeek V4 Flash" },
@@ -217,10 +219,46 @@ describe("cline /api/v1/models aggregation (resolveClineModels vs resolveClinepa
     { id: "z-ai/deepseek-v4-flash", name: "DeepSeek V4 Flash (Free)" },
   ];
 
+  // OpenRouter-shaped catalog: only the ids ending in :free are free tier.
+  const FREE_CATALOG_RESPONSE = {
+    data: [
+      {
+        id: "z-ai/glm-5.3-flash:free",
+        name: "GLM-5.3 Flash (free)",
+        context_length: 262144,
+        top_provider: { max_completion_tokens: 32768 },
+        architecture: { input_modalities: ["text"] },
+        supported_parameters: ["tools"],
+      },
+      { id: "z-ai/glm-5.3-flash", name: "GLM-5.3 Flash (paid)" },
+    ],
+  };
+
+  const FREE_FEED_RESPONSE = {
+    recommended: [{ id: "anthropic/claude-opus-5", name: "claude-opus-5" }],
+    free: [
+      { id: "cline-free/deepseek-v4.1-flash", name: "Deepseek V4.1 Flash", description: "", tags: [] },
+      { id: "stealth/space-bunny-alpha", name: "Space Bunny Alpha", description: "", tags: [] },
+    ],
+    clinePass: [{ id: "cline-pass/glm-5.3", name: "GLM-5.3", description: "", tags: [] }],
+  };
+
+  const jsonResponse = (obj) => ({
+    ok: true,
+    status: 200,
+    json: async () => obj,
+    text: async () => JSON.stringify(obj),
+  });
+
   let fetchMock;
 
   beforeEach(() => {
-    fetchMock = vi.fn();
+    fetchMock = vi.fn(async (url) => {
+      if (String(url) === FREE_CATALOG_URL) return jsonResponse(FREE_CATALOG_RESPONSE);
+      if (String(url) === FREE_FEED_URL) return jsonResponse(FREE_FEED_RESPONSE);
+      if (String(url) === API_MODELS_URL) return jsonResponse(API_RESPONSE);
+      throw new Error("unexpected fetch: " + url);
+    });
     vi.stubGlobal("fetch", fetchMock);
   });
 
@@ -228,27 +266,50 @@ describe("cline /api/v1/models aggregation (resolveClineModels vs resolveClinepa
     vi.unstubAllGlobals();
   });
 
-  it("resolveClineModels returns all models (including free-tier)", async () => {
+  it("assembles the free list from the :free catalog and the feed's free[] tier", async () => {
     const { resolveClineModels } = await import("../../open-sse/services/clinepassModels.js");
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => API_RESPONSE,
-    });
-    const result = await resolveClineModels({ accessToken: "test-token" });
+    const result = await resolveClineModels();
     expect(result).not.toBeNull();
-    expect(result.models).toHaveLength(4);
     const ids = result.models.map((m) => m.id);
-    expect(ids).toContain("cline-pass/deepseek-v4-flash");
-    expect(ids).toContain("z-ai/glm-5.3-flash");
-    expect(ids).toContain("z-ai/deepseek-v4-flash");
+    expect(ids).toContain("z-ai/glm-5.3-flash:free");
+    expect(ids).toContain("cline-free/deepseek-v4.1-flash");
+    expect(ids).toContain("stealth/space-bunny-alpha");
+  });
+
+  it("excludes paid catalog entries and the feed's other categories", async () => {
+    const { resolveClineModels } = await import("../../open-sse/services/clinepassModels.js");
+    const result = await resolveClineModels();
+    const ids = result.models.map((m) => m.id);
+    expect(ids).not.toContain("z-ai/glm-5.3-flash");
+    expect(ids).not.toContain("anthropic/claude-opus-5");
+    expect(ids).not.toContain("cline-pass/glm-5.3");
+  });
+
+  it("resolveClineModels needs no credentials (both feeds are public)", async () => {
+    const { resolveClineModels } = await import("../../open-sse/services/clinepassModels.js");
+    const result = await resolveClineModels();
+    expect(result).not.toBeNull();
+    expect(result.models.length).toBeGreaterThan(0);
+  });
+
+  it("resolveClineModels returns null when both feeds fail", async () => {
+    fetchMock.mockImplementation(async () => ({ ok: false, status: 503, json: async () => ({}), text: async () => "" }));
+    const { resolveClineModels } = await import("../../open-sse/services/clinepassModels.js");
+    const result = await resolveClineModels();
+    expect(result).toBeNull();
+  });
+
+  it("resolveClineModels returns {id,name} shape", async () => {
+    const { resolveClineModels } = await import("../../open-sse/services/clinepassModels.js");
+    const result = await resolveClineModels();
+    for (const model of result.models) {
+      expect(typeof model.id).toBe("string");
+      expect(typeof model.name).toBe("string");
+    }
   });
 
   it("resolveClinepassModels returns only cline-pass/ models", async () => {
     const { resolveClinepassModels } = await import("../../open-sse/services/clinepassModels.js");
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => API_RESPONSE,
-    });
     const result = await resolveClinepassModels({ accessToken: "test-token" });
     expect(result).not.toBeNull();
     expect(result.models).toHaveLength(2);
@@ -258,40 +319,16 @@ describe("cline /api/v1/models aggregation (resolveClineModels vs resolveClinepa
     expect(ids).not.toContain("z-ai/glm-5.3-flash");
   });
 
-  it("resolveClineModels unwraps {success,data} envelope", async () => {
-    const { resolveClineModels } = await import("../../open-sse/services/clinepassModels.js");
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => ({ success: true, data: API_RESPONSE }),
-    });
-    const result = await resolveClineModels({ accessToken: "test-token" });
-    expect(result).not.toBeNull();
-    expect(result.models).toHaveLength(4);
-  });
-
-  it("resolveClineModels returns null when no token", async () => {
-    const { resolveClineModels } = await import("../../open-sse/services/clinepassModels.js");
-    const result = await resolveClineModels({});
+  it("resolveClinepassModels returns null when no token", async () => {
+    const { resolveClinepassModels } = await import("../../open-sse/services/clinepassModels.js");
+    const result = await resolveClinepassModels({});
     expect(result).toBeNull();
   });
 
-  it("resolveClineModels returns null on fetch error", async () => {
-    const { resolveClineModels } = await import("../../open-sse/services/clinepassModels.js");
+  it("resolveClinepassModels returns null on fetch error", async () => {
+    const { resolveClinepassModels } = await import("../../open-sse/services/clinepassModels.js");
     fetchMock.mockRejectedValue(new Error("network error"));
-    const result = await resolveClineModels({ accessToken: "test-token" });
+    const result = await resolveClinepassModels({ accessToken: "test-token" });
     expect(result).toBeNull();
-  });
-
-  it("resolveClineModels returns {id,name} shape", async () => {
-    const { resolveClineModels } = await import("../../open-sse/services/clinepassModels.js");
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => API_RESPONSE,
-    });
-    const result = await resolveClineModels({ accessToken: "test-token" });
-    expect(result.models[0]).toHaveProperty("id");
-    expect(result.models[0]).toHaveProperty("name");
-    expect(typeof result.models[0].id).toBe("string");
-    expect(typeof result.models[0].name).toBe("string");
   });
 });

@@ -137,7 +137,7 @@ const getPageInfo = (pathname) => {
     return {
       title: "Proxy Pools",
       description: "Manage your proxy pool configurations",
-      icon: "android_wifi_4_bar_lock",
+      icon: "lan",
       breadcrumbs: [],
     };
   if (pathname.includes("/skills"))

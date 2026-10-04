@@ -440,20 +440,19 @@ const PROVIDER_MODELS_CONFIG = {
     },
   },
 
-  // Cline/ClinePass share api.cline.bot/api/v1/models. The service layer already
-  // handles Bearer-vs-`workos:` auth and swallows failures into null, so these follow
-  // the cursor direct pattern (no refreshFn) and only differ in filtering:
-  // cline returns the whole catalog verbatim, clinepass keeps cline-pass/* only.
+  // cline assembles its free-tier list from two public feeds (see
+  // resolveClineModels); clinepass reads the authenticated /models catalog and
+  // keeps cline-pass/* only. The service layer handles Bearer-vs-`workos:` auth
+  // and swallows failures into null, so these follow the cursor direct pattern
+  // (no refreshFn).
   cline: {
-    customResolver: async (connection) => {
-      const result = await resolveClineModels({
-        accessToken: connection.accessToken,
-        apiKey: connection.apiKey,
-      });
+    customResolver: async () => {
+      const result = await resolveClineModels();
       if (result?.models?.length) return { models: result.models };
+      // No static fallback: the free-tier list only exists upstream.
       return {
-        models: getStaticProviderModels("cline"),
-        warning: "Cline returned no live models; falling back to static catalog.",
+        models: [],
+        warning: "Cline returned no live models; the free-tier feeds are unreachable.",
       };
     },
   },

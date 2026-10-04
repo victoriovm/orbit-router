@@ -28,6 +28,11 @@ import CustomConfigCard from "./CustomConfigCard";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
 
+// Providers whose model list is fetched per-connection from /api/providers/[id]/models
+// instead of the static registry (cursor/cline/clinepass/zed). Cline's two feeds are
+// public; the others resolve with the connection's credentials.
+const LIVE_CATALOG_PROVIDER_IDS = ["cursor", "cline", "clinepass", "zed"];
+
 const AUTO_PING_SETTINGS_KEYS = {
   claude: "claudeAutoPing",
   codex: "codexAutoPing",
@@ -157,7 +162,7 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
   const supportsApiKeyAuth = !!APIKEY_PROVIDERS[providerId] || authModes.includes("apikey");
   const isFreeNoAuth = !!FREE_PROVIDERS[providerId]?.noAuth;
   const staticModels = getModelsByProviderId(providerId);
-  const models = (providerId === "cursor" || providerId === "zed") && liveModels.length > 0
+  const models = LIVE_CATALOG_PROVIDER_IDS.includes(providerId) && liveModels.length > 0
     ? liveModels
     : staticModels;
   const providerAlias = getProviderAlias(providerId);
@@ -471,13 +476,13 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
     fetchDisabledModels();
   }, [fetchConnections, fetchAliases, fetchCustomModels, fetchDisabledModels]);
 
-  // Live per-connection catalogs (cursor, zed): the static registry carries
-  // no usable list, so resolve from the active connection. Fires only when
-  // the provider id or connection list changes — no polling, no loop.
-  // Cursor path is statement-identical to before; zed adds error surfacing.
+  // Live per-connection catalogs (cursor, cline, clinepass, zed): the static
+  // registry carries no usable list, so resolve from the active connection.
+  // Cline/clinepass serve it without credentials (their feeds are public).
+  // Fires only when the provider id or connection list changes — no polling.
+  const isLiveCatalogProvider = LIVE_CATALOG_PROVIDER_IDS.includes(providerId);
   useEffect(() => {
-    const isLiveCatalog = providerId === "cursor" || providerId === "zed";
-    if (!isLiveCatalog) {
+    if (!isLiveCatalogProvider) {
       setLiveModels([]);
       return;
     }
@@ -485,35 +490,36 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
     const connection = connections.find((item) => item.isActive !== false);
     if (!connection?.id) {
       setLiveModels([]);
-      if (providerId === "zed") setLiveModelsError(null);
+      setLiveModelsError(null);
       return;
     }
 
     let cancelled = false;
-    if (providerId === "zed") setLiveModelsError(null);
+    setLiveModelsError(null);
     fetch(`/api/providers/${connection.id}/models`, { cache: "no-store" })
       .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => null) }))
       .then(({ ok, data }) => {
         if (cancelled) return;
         if (ok && Array.isArray(data?.models) && data.models.length > 0) {
           setLiveModels(data.models);
-          if (providerId === "zed" && data?.warning) setLiveModelsError(data.warning);
+          if (data?.warning) setLiveModelsError(data.warning);
           return;
         }
-        if (providerId === "zed") {
-          setLiveModels([]);
-          setLiveModelsError(data?.warning || data?.error || "Zed returned no live models.");
-        }
+        setLiveModels([]);
+        setLiveModelsError(data?.warning || data?.error || "No live models returned.");
       })
       .catch(() => {
-        if (!cancelled && providerId === "zed") {
-          setLiveModels([]);
-          setLiveModelsError("Failed to reach the Zed model catalog.");
-        }
+        if (cancelled) return;
+        setLiveModels([]);
+        setLiveModelsError("Failed to reach the model catalog.");
       });
 
     return () => { cancelled = true; };
-  }, [providerId, connections]);
+  }, [providerId, connections, isLiveCatalogProvider]);
+  // Surface catalog failures only where there is no static fallback to show
+  // (zed, cline Free). cursor/clinepass have static lists, so a warning there
+  // would sit next to a usable list and only add noise.
+  const showLiveModelsError = staticModels.length === 0 && !!liveModelsError;
 
   // Fetch suggested models from provider's public API (if configured)
   useEffect(() => {
@@ -668,8 +674,9 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
       setDiscoveringModels(false);
     }
   };
-  // Fetch the live Cline /models catalog and add every model not yet present.
-  // Cline and ClinePass share the same catalog endpoint (api.cline.bot/api/v1/models).
+  // Import the live model list and add every model not yet present. Cline Free
+  // assembles it from the two public feeds (see resolveClineModels); ClinePass
+  // reads the authenticated /models catalog.
   const handleImportClineModels = async () => {
     if (importingClineModels) return;
     const activeConnection = connections.find((conn) => conn.isActive !== false);
@@ -1842,7 +1849,7 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
             })()}
           </div>
         )}
-        {providerId === "zed" && !!liveModelsError && (
+        {showLiveModelsError && (
           <p className="text-xs text-red-500 mb-3 break-words">{liveModelsError}</p>
         )}
         {renderModelsSection()}

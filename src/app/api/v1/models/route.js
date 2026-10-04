@@ -114,11 +114,8 @@ const LIVE_MODEL_RESOLVERS = {
     });
     return result?.models?.length ? { models: result.models } : null;
   },
-  cline: async (conn) => {
-    const result = await resolveClineModels({
-      accessToken: conn.accessToken,
-      apiKey: conn.apiKey,
-    });
+  cline: async () => {
+    const result = await resolveClineModels();
     return result?.models?.length ? { models: result.models } : null;
   },
   "grok-cli": async (conn) => {
