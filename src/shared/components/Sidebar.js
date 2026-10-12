@@ -248,7 +248,7 @@ const isActive = (href) => {
               ) : null;
             })}
 
-            {/* Settings */}
+{/* Settings */}
             <Link
               href="/dashboard/profile"
               onClick={onClose}
@@ -273,7 +273,6 @@ const isActive = (href) => {
         </nav>
 
       </aside>
-
     </>
   );
 }

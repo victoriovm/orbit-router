@@ -26,7 +26,9 @@ const ALIAS_TOKENS = [
   "pgs","phoenix-grove","vultr","nov","novita","modal",
   "muse","muse-ai","meta-model-api",
   "muse-code","muse-subscription",
-  "tinyfish","v1m","runanywhere",
+"tinyfish","v1m","runanywhere",
+  "br","bedrock","aws-bedrock",
+  "brx","bedrock-xai","bedrock-grok",
 ];
 
 // Sort idToAlias by key — runtime accesses by key, order is irrelevant (content-based)

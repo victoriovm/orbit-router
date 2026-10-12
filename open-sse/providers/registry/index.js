@@ -140,6 +140,10 @@ import p137 from "./runanywhere.js";
 import p138 from "./tinyfish.js";
 import p139 from "./v1m.js";
 import p140 from "./muse.js";
+import p141 from "./minimax-code.js";
+import p142 from "./minimax-code-global.js";
+import p143 from "./bedrock.js";
+import p144 from "./bedrock-xai.js";
 export default [
   p0,
   p1,
@@ -280,4 +284,8 @@ export default [
   p138,
   p139,
   p140,
+  p141,
+  p142,
+  p143,
+  p144,
 ];
