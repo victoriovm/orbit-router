@@ -29,6 +29,7 @@ const ALIAS_TOKENS = [
 "tinyfish","v1m","runanywhere",
   "br","bedrock","aws-bedrock",
   "brx","bedrock-xai","bedrock-grok",
+  "nous","nous-portal","nous-research","ns",
 ];
 
 // Sort idToAlias by key — runtime accesses by key, order is irrelevant (content-based)

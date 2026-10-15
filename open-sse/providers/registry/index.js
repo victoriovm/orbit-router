@@ -144,6 +144,7 @@ import p141 from "./minimax-code.js";
 import p142 from "./minimax-code-global.js";
 import p143 from "./bedrock.js";
 import p144 from "./bedrock-xai.js";
+import p145 from "./nous.js";
 export default [
   p0,
   p1,
@@ -288,4 +289,5 @@ export default [
   p142,
   p143,
   p144,
+  p145,
 ];

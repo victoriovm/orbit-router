@@ -140,7 +140,11 @@
     "aws-bedrock": "bedrock",
     "brx": "bedrock-xai",
     "bedrock-xai": "bedrock-xai",
-    "bedrock-grok": "bedrock-xai"
+    "bedrock-grok": "bedrock-xai",
+    "nous": "nous",
+    "nous-portal": "nous",
+    "nous-research": "nous",
+    "ns": "nous"
   },
   "idToAlias": {
     "agnes": "agnes",
@@ -229,6 +233,7 @@
     "muse": "muse",
     "nanobanana": "nanobanana",
     "nebius": "nebius",
+    "nous": "nous",
     "novita": "nov",
     "nvidia": "nvidia",
     "ollama": "ollama",
@@ -357,6 +362,7 @@
     "muse",
     "nanobanana",
     "nebius",
+    "nous",
     "nov",
     "nvidia",
     "oc",
