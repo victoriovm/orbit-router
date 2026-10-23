@@ -14,9 +14,10 @@ import {
 } from "./endpointConstants";
 import { clientPingUrl, clientPingAny } from "./endpointPing";
 import useSettingsStore from "@/store/settingsStore";
+import EndpointRow from "./components/EndpointRow";
 import StatusAlert from "./components/StatusAlert";
+import Tooltip from "./components/Tooltip";
 import SecurityWarning from "./components/SecurityWarning";
-import SettingsCardHeader from "../profile/components/SettingsCardHeader";
 import KeyAccessControls from "./components/KeyAccessControls";
 export default function APIPageClient({ machineId }) {
   const [keys, setKeys] = useState([]);
@@ -74,6 +75,9 @@ export default function APIPageClient({ machineId }) {
   const tsEverReachableRef = useRef(false);
   const [tunnelEverReachable, setTunnelEverReachable] = useState(false);
   const [tsEverReachable, setTsEverReachable] = useState(false);
+
+  // API key visibility toggle state
+  const [visibleKeys, setVisibleKeys] = useState(new Set());
 
   // Client-side local/remote detection (UI hint only, not a security gate)
   const [isRemoteHost, setIsRemoteHost] = useState(false);
@@ -643,6 +647,11 @@ export default function APIPageClient({ machineId }) {
           const res = await fetch(`/api/keys/${id}`, { method: "DELETE" });
           if (res.ok) {
             setKeys(keys.filter((k) => k.id !== id));
+            setVisibleKeys(prev => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
           }
         } catch (error) {
           console.log("Error deleting key:", error);
@@ -690,6 +699,15 @@ export default function APIPageClient({ machineId }) {
     return fullKey.slice(0, 6) + "•".repeat(fullKey.length - 10) + fullKey.slice(-4);
   };
 
+  const toggleKeyVisibility = (keyId) => {
+    setVisibleKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(keyId)) next.delete(keyId);
+      else next.add(keyId);
+      return next;
+    });
+  };
+
   const [baseUrl, setBaseUrl] = useState("/v1");
 
   // Hydration fix: Only access window on client side
@@ -701,195 +719,389 @@ export default function APIPageClient({ machineId }) {
 
   if (loading) {
     return (
-      <div className="w-full px-1 sm:px-0">
-        <div className="flex flex-col gap-6">
-          <CardSkeleton />
-          <CardSkeleton />
-        </div>
+      <div className="flex flex-col gap-8">
+        <CardSkeleton />
+        <CardSkeleton />
       </div>
     );
   }
 
   const currentEndpoint = baseUrl;
+
   return (
-    <div className="w-full px-1 sm:px-0">
-      <div className="flex flex-col gap-6">
-        <div className="flex min-w-0 flex-col gap-6">
-          {/* Endpoint Card */}
-          <Card padding="none" className="overflow-hidden">
-            <div className="p-6">
-              <SettingsCardHeader
-                icon="http"
-                title="API Endpoint"
-                subtitle="Connect any OpenAI-compatible client to Orbit Router"
-              />
+    <div className="flex flex-col gap-8">
+      {/* Endpoint Card */}
+      <Card>
+        <h2 className="text-lg font-semibold mb-1 flex items-center gap-2">
+          <span className="material-symbols-outlined text-primary">api</span>
+          API Endpoint
+        </h2>
+        <p className="text-sm text-text-muted mb-4">Connect any OpenAI-compatible client to Orbit Router</p>
 
-              <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(220px,0.55fr)_minmax(0,1.45fr)]">
-                <div className="flex items-center gap-3 rounded-xl border border-border bg-bg p-3 ps-4">
-                  <div className="flex size-10 shrink-0 items-center justify-center rounded-[10px] border border-primary/20 bg-primary/10 text-primary">
-                    <span className="material-symbols-outlined endpoint-panel-icon">hub</span>
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-text-main">Universal API</p>
-                    <p className="truncate text-xs text-text-muted">Works with OpenAI clients</p>
-                  </div>
+        {/* Endpoint rows */}
+        <div className="flex flex-col gap-2">
+          {/* Local */}
+          <EndpointRow
+            label="Local"
+            url={currentEndpoint}
+            copyId="local_url"
+            copied={copied}
+            onCopy={copy}
+          />
+          {/* Cloudflare Tunnel */}
+          <div className="flex items-center gap-2">
+            <span className={`text-xs font-mono px-1.5 py-0.5 rounded shrink-0 min-w-[88px] text-center ${
+              tunnelEnabled ? "bg-primary/10 text-primary" : "bg-surface-2 text-text-muted"
+            }`}>Tunnel</span>
+            {tunnelEnabled && !tunnelLoading && tunnelReachable ? (
+              <>
+                <Input value={`${tunnelPublicUrl || tunnelUrl}/v1`} readOnly className="flex-1 font-mono text-sm" />
+                <button
+                  onClick={() => copy(`${tunnelPublicUrl || tunnelUrl}/v1`, "tunnel_url")}
+                  className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-colors shrink-0"
+                >
+                  <span className="material-symbols-outlined text-[18px]">{copied === "tunnel_url" ? "check" : "content_copy"}</span>
+                </button>
+                <button
+                  onClick={() => setShowDisableTunnelModal(true)}
+                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
+                  title="Disable Tunnel"
+                >
+                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
+                </button>
+              </>
+            ) : tunnelEnabled && !tunnelLoading && !tunnelReachable ? (
+              <>
+                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-amber-300 dark:border-amber-800 bg-amber-500/5 text-sm text-amber-600 dark:text-amber-400">
+                  <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
+                  {tunnelEverReachable ? "Tunnel reconnecting..." : "Tunnel checking..."}
                 </div>
-
-                <div className="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-bg p-2 ps-4">
-                  <div className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-surface-2 text-text-muted">
-                    <span className="material-symbols-outlined endpoint-panel-icon">terminal</span>
-                  </div>
-                  <div className="min-w-0 flex-1 px-1">
-                    <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted">Endpoint URL</p>
-                    <code className="block truncate font-mono text-sm text-text-main" title={currentEndpoint}>
-                      {currentEndpoint}
-                    </code>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => copy(currentEndpoint, "local_url")}
-                    className={`flex size-10 shrink-0 items-center justify-center rounded-[10px] border transition-colors ${copied === "local_url" ? "border-success/30 bg-success/10 text-success" : "border-border bg-surface-2 text-text-muted hover:border-primary/30 hover:text-primary"}`}
-                    title="Copy endpoint"
-                    aria-label="Copy endpoint"
+                <button
+                  onClick={() => setShowDisableTunnelModal(true)}
+                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
+                  title="Disable Tunnel"
+                >
+                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
+                </button>
+              </>
+            ) : tunnelLoading ? (
+              <>
+                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-border bg-input text-sm text-text-muted">
+                  <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
+                  {tunnelProgress || "Creating tunnel..."}
+                </div>
+                <button
+                  onClick={() => { setTunnelLoading(false); setTunnelProgress(""); }}
+                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
+                  title="Stop"
+                >
+                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
+                </button>
+              </>
+            ) : tunnelStatus?.type === "error" ? (
+              <>
+                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-red-300 dark:border-red-800 bg-red-500/5 text-sm text-red-600 dark:text-red-400">
+                  <span className="material-symbols-outlined text-sm">error</span>
+                  {tunnelStatus.message}
+                </div>
+                <Button size="sm" icon="cloud_upload" onClick={() => setShowEnableTunnelModal(true)}>Enable</Button>
+              </>
+            ) : tunnelChecking ? (
+              <>
+                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-border bg-input text-sm text-text-muted">
+                  <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
+                  Checking...
+                </div>
+                <button
+                  onClick={() => setTunnelChecking(false)}
+                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
+                  title="Stop"
+                >
+                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
+                </button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                icon="cloud_upload"
+                onClick={() => {
+                  if (isLoginUnsafe) {
+                    setTunnelStatus({ type: "error", message: `Security required: ${unsafeReason}` });
+                    return;
+                  }
+                  if (!requireApiKey) {
+                    setTunnelStatus({ type: "error", message: "Security required: Enable \"Require API key\" before activating the tunnel." });
+                    return;
+                  }
+                  setShowEnableTunnelModal(true);
+                }}
+              >
+                Enable
+              </Button>
+            )}
+          </div>
+          {/* Tailscale */}
+          <div className="flex items-center gap-2">
+            <span className={`text-xs font-mono px-1.5 py-0.5 rounded shrink-0 min-w-[88px] text-center ${
+              tsEnabled ? "bg-primary/10 text-primary" : "bg-surface-2 text-text-muted"
+            }`}>Tailscale</span>
+            {tsEnabled && !tsLoading && tsReachable ? (
+              <>
+                <Input value={`${tsUrl}/v1`} readOnly className="flex-1 font-mono text-sm" />
+                <button
+                  onClick={() => copy(`${tsUrl}/v1`, "ts_url")}
+                  className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-colors shrink-0"
+                >
+                  <span className="material-symbols-outlined text-[18px]">{copied === "ts_url" ? "check" : "content_copy"}</span>
+                </button>
+                <button
+                  onClick={() => setShowDisableTsModal(true)}
+                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
+                  title="Disable Tailscale"
+                >
+                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
+                </button>
+              </>
+            ) : tsEnabled && !tsLoading && !tsReachable ? (
+              <>
+                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-amber-300 dark:border-amber-800 bg-amber-500/5 text-sm text-amber-600 dark:text-amber-400">
+                  <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
+                  {tsEverReachable ? "Tailscale reconnecting..." : "Tailscale checking..."}
+                </div>
+                <button
+                  onClick={() => setShowDisableTsModal(true)}
+                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
+                  title="Disable Tailscale"
+                >
+                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
+                </button>
+              </>
+            ) : (tsLoading || tsConnecting) ? (
+              <>
+                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-border bg-input text-sm text-text-muted">
+                  <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
+                  {tsProgress || "Connecting..."}
+                </div>
+                {tsAuthUrl && (
+                  <Button
+                    size="sm"
+                    icon="open_in_new"
+                    onClick={() => window.open(tsAuthUrl, "tailscale_auth", "width=600,height=700,noopener,noreferrer")}
                   >
-                    <span className="material-symbols-outlined text-[18px]">
-                      {copied === "local_url" ? "check" : "content_copy"}
-                    </span>
+                    {tsAuthLabel || "Open"}
+                  </Button>
+                )}
+                <button
+                  onClick={() => { setTsLoading(false); setTsConnecting(false); setTsProgress(""); clearUserAuth(); }}
+                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
+                  title="Stop"
+                >
+                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
+                </button>
+              </>
+            ) : tsStatus?.type === "error" ? (
+              <>
+                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-red-300 dark:border-red-800 bg-red-500/5 text-sm text-red-600 dark:text-red-400">
+                  <span className="material-symbols-outlined text-sm">error</span>
+                  {tsStatus.message}
+                </div>
+                <Button size="sm" icon="vpn_lock" onClick={handleOpenTsModal}>Enable</Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                icon="vpn_lock"
+                onClick={() => {
+                  if (isLoginUnsafe) {
+                    setTsStatus({ type: "error", message: `Security required: ${unsafeReason}` });
+                    return;
+                  }
+                  handleOpenTsModal();
+                }}
+                className="bg-linear-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white!"
+              >
+                Enable
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Pre-enable security gate banner */}
+        {isLoginUnsafe && !tunnelEnabled && !tsEnabled && (
+          <div className="mt-4">
+            <SecurityWarning
+              message={unsafeReason}
+              action={{ label: "Open settings", href: "/dashboard/profile" }}
+            />
+          </div>
+        )}
+
+        {/* Security warnings when tunnel or tailscale is active */}
+        {(tunnelEnabled || tsEnabled) && (
+          <div className="mt-4 flex flex-col gap-2">
+            {!requireApiKey && (
+              <SecurityWarning
+                message="Require API key is disabled — your endpoint is publicly accessible without authentication."
+                action={{ label: "Enable", href: "#require-api-key" }}
+              />
+            )}
+            {(!requireLogin || !hasPassword) && (
+              <SecurityWarning
+                message={
+                  !requireLogin
+                    ? "Require login is disabled — anyone can access your dashboard via tunnel."
+                    : "Dashboard uses the default password — change it in Profile settings."
+                }
+                action={{
+                  label: !requireLogin ? "Enable" : "Change password",
+                  href: "/dashboard/profile",
+                }}
+              />
+            )}
+          </div>
+        )}
+
+        {/* Tunnel dashboard access option */}
+        {(tunnelEnabled || tsEnabled) && (
+          <div className="mt-4 pt-4 border-t border-border flex items-center gap-3">
+            <Toggle
+              checked={tunnelDashboardAccess}
+              onChange={() => handleTunnelDashboardAccess(!tunnelDashboardAccess)}
+            />
+            <div className="flex items-center gap-1.5">
+              <p className="font-medium text-sm">Allow dashboard access via tunnel</p>
+              <Tooltip text="When enabled, the dashboard can be accessed through your tunnel or Tailscale URL (login still required). When disabled, dashboard access via tunnel/Tailscale is completely blocked." />
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* API Keys */}
+      <Card id="require-api-key">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary">vpn_key</span>
+            API Keys
+          </h2>
+          <Button icon="add" onClick={() => setShowAddModal(true)}>
+            Create Key
+          </Button>
+        </div>
+
+        <div className="flex items-center justify-between pb-4 mb-4 border-b border-border">
+          <div>
+            <p className="font-medium">Require API key</p>
+            <p className="text-sm text-text-muted">
+              Requests without a valid key will be rejected
+            </p>
+          </div>
+          <Toggle
+            checked={requireApiKey}
+            onChange={() => handleRequireApiKey(!requireApiKey)}
+          />
+        </div>
+
+        {isRemoteHost && !requireApiKey && (
+          <div className="mb-4 -mt-2">
+            <SecurityWarning message="Endpoint is exposed without an API key." />
+          </div>
+        )}
+
+        {keys.length === 0 ? (
+          <div className="text-center py-12">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 text-primary mb-4">
+              <span className="material-symbols-outlined text-[32px]">vpn_key</span>
+            </div>
+            <p className="text-text-main font-medium mb-1">No API keys yet</p>
+            <p className="text-sm text-text-muted mb-4">Create your first API key to get started</p>
+            <Button icon="add" onClick={() => setShowAddModal(true)}>
+              Create Key
+            </Button>
+          </div>
+        ) : (
+          <div className="flex flex-col">
+            {keys.map((key) => (
+              <div
+                key={key.id}
+                className={`group flex items-start justify-between gap-3 py-3 border-b border-black/[0.03] dark:border-white/[0.03] last:border-b-0 ${key.isActive === false ? "opacity-60" : ""}`}
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium">{key.name}</p>
+                  <div className="flex items-center gap-2 mt-1 min-w-0 flex-wrap">
+                    <code className="text-xs text-text-muted font-mono break-all min-w-0">
+                      {visibleKeys.has(key.id) ? key.key : maskKey(key.key)}
+                    </code>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => toggleKeyVisibility(key.id)}
+                        className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
+                        title={visibleKeys.has(key.id) ? "Hide key" : "Show key"}
+                      >
+                        <span className="material-symbols-outlined text-[14px]">
+                          {visibleKeys.has(key.id) ? "visibility_off" : "visibility"}
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => copy(key.key, key.id)}
+                        className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
+                      >
+                        <span className="material-symbols-outlined text-[14px]">
+                          {copied === key.id ? "check" : "content_copy"}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-xs text-text-muted mt-1">
+                    Created {new Date(key.createdAt).toLocaleDateString()}
+                  </p>
+                  {key.isActive === false && (
+                    <p className="text-xs text-orange-500 mt-1">Paused</p>
+                  )}
+                  <KeyAccessControls
+                    apiKey={key}
+                    onChange={(access) => handleUpdateKeyAccess(key.id, access)}
+                    onRequestRestrict={() => setConfirmState({
+                      title: "Restrict API Key",
+                      message: `Restrict API key "${key.name}"?\n\nIt will only be able to call the combos and models you add. Until you add one, it can call nothing.`,
+                      onConfirm: async () => {
+                        setConfirmState(null);
+                        handleUpdateKeyAccess(key.id, { restricted: true, allow: key.access?.allow || [] });
+                      }
+                    })}
+                  />
+                </div>
+                <div className="flex items-center gap-2 shrink-0 pt-0.5">
+                  <Toggle
+                    size="sm"
+                    checked={key.isActive ?? true}
+                    onChange={(checked) => {
+                      if (key.isActive && !checked) {
+                        setConfirmState({
+                          title: "Pause API Key",
+                          message: `Pause API key "${key.name}"?\n\nThis key will stop working immediately but can be resumed later.`,
+                          onConfirm: async () => {
+                            setConfirmState(null);
+                            handleToggleKey(key.id, checked);
+                          }
+                        });
+                      } else {
+                        handleToggleKey(key.id, checked);
+                      }
+                    }}
+                    title={key.isActive ? "Pause key" : "Resume key"}
+                  />
+                  <button
+                    onClick={() => handleDeleteKey(key.id)}
+                    className="p-2 hover:bg-red-500/10 rounded text-red-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">delete</span>
                   </button>
                 </div>
               </div>
-            </div>
-          </Card>
-
-          {/* API Keys */}
-          <Card id="require-api-key" padding="none" className="overflow-hidden">
-            <div className="p-6">
-              <div className="flex items-center justify-between gap-4">
-                <SettingsCardHeader
-                  icon="vpn_key"
-                  title="API Keys"
-                  subtitle="Create, pause, and rotate gateway credentials"
-                />
-                <Toggle
-                  checked={requireApiKey}
-                  onChange={() => handleRequireApiKey(!requireApiKey)}
-                />
-              </div>
-
-              <Button
-                icon="add"
-                size="md"
-                fullWidth
-                className="mt-5"
-                onClick={() => setShowAddModal(true)}
-              >
-                Create API key
-              </Button>
-
-              {isRemoteHost && !requireApiKey && (
-                <div className="mt-3">
-                  <SecurityWarning message="Endpoint is exposed without an API key." />
-                </div>
-              )}
-            </div>
-
-            <div className="border-t border-border-subtle bg-bg/30 p-3 sm:p-4">
-              {keys.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-border bg-surface p-8 text-center">
-                  <div className="mx-auto flex size-10 items-center justify-center rounded-xl border border-border bg-bg text-text-muted">
-                    <span className="material-symbols-outlined text-[20px]">key_off</span>
-                  </div>
-                  <p className="mt-3 text-sm font-medium text-text-main">No API keys yet</p>
-                  <p className="mt-1 text-xs text-text-muted">Create your first key to secure external requests.</p>
-                </div>
-              ) : (
-                <div className="grid gap-2">
-                  {keys.map((apiKey) => {
-                    const isActive = apiKey.isActive !== false;
-
-                    return (
-                      <div
-                        key={apiKey.id}
-                        className={`group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-xl border p-2 transition-colors sm:grid-cols-[auto_minmax(180px,0.8fr)_minmax(260px,1.4fr)_auto] ${isActive ? "border-border bg-surface hover:border-primary/25" : "border-border-subtle bg-bg opacity-70"}`}
-                      >
-                        <div className="col-start-1 row-start-1 flex size-10 items-center justify-center rounded-[10px] border border-border bg-bg">
-                          <input
-                            type="checkbox"
-                            checked={isActive}
-                            onChange={(event) => {
-                              const checked = event.target.checked;
-                              if (isActive && !checked) {
-                                setConfirmState({
-                                  title: "Pause API Key",
-                                  message: `Pause API key "${apiKey.name}"?\n\nThis key will stop working immediately but can be resumed later.`,
-                                  onConfirm: async () => {
-                                    setConfirmState(null);
-                                    handleToggleKey(apiKey.id, checked);
-                                  }
-                                });
-                              } else {
-                                handleToggleKey(apiKey.id, checked);
-                              }
-                            }}
-                            className="size-4 cursor-pointer accent-primary"
-                            title={isActive ? "Pause key" : "Resume key"}
-                            aria-label={isActive ? `Pause ${apiKey.name}` : `Resume ${apiKey.name}`}
-                          />
-                        </div>
-
-                        <div className="col-start-2 row-start-1 flex h-10 min-w-0 items-center justify-center rounded-[10px] border border-border bg-bg px-3 text-center">
-                          <p className="truncate text-sm font-medium text-text-main">{apiKey.name}</p>
-                        </div>
-
-                        <div className="col-span-2 col-start-2 row-start-2 flex h-10 min-w-0 items-center overflow-hidden rounded-[10px] border border-border bg-bg sm:col-span-1 sm:col-start-3 sm:row-start-1">
-                          <code className="min-w-0 flex-1 truncate px-3 font-mono text-xs text-text-muted">
-                            {maskKey(apiKey.key)}
-                          </code>
-                          <button
-                            type="button"
-                            onClick={() => copy(apiKey.key, apiKey.id)}
-                            className={`flex h-full w-10 shrink-0 items-center justify-center border-l border-border transition-colors ${copied === apiKey.id ? "bg-success/10 text-success" : "text-text-muted hover:bg-primary/10 hover:text-primary"}`}
-                            title="Copy key"
-                            aria-label={`Copy ${apiKey.name}`}
-                          >
-                            <span className="material-symbols-outlined endpoint-key-icon">
-                              {copied === apiKey.id ? "check" : "content_copy"}
-                            </span>
-                          </button>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteKey(apiKey.id)}
-                          className="col-start-3 row-start-1 flex size-10 items-center justify-center rounded-[10px] border border-danger/30 bg-danger/10 text-danger transition-colors hover:border-danger/50 hover:bg-danger/15 sm:col-start-4"
-                          title="Delete key"
-                          aria-label={`Delete ${apiKey.name}`}
-                        >
-                          <span className="material-symbols-outlined endpoint-key-icon">delete</span>
-                        </button>
-
-                        <div className="col-span-full">
-                          <KeyAccessControls
-                            apiKey={apiKey}
-                            onChange={(access) => handleUpdateKeyAccess(apiKey.id, access)}
-                            onRequestRestrict={() => setConfirmState({
-                              title: "Restrict API Key",
-                              message: `Restrict API key "${apiKey.name}"?\n\nIt will only be able to call the combos and models you add. Until you add one, it can call nothing.`,
-                              onConfirm: async () => {
-                                setConfirmState(null);
-                                handleUpdateKeyAccess(apiKey.id, { restricted: true, allow: apiKey.access?.allow || [] });
-                              }
-                            })}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </Card>
-        </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
       {/* Add Key Modal */}
       <Modal
@@ -937,7 +1149,7 @@ export default function APIPageClient({ machineId }) {
               Save this key now!
             </p>
             <p className="text-sm text-yellow-700 dark:text-yellow-300">
-              This is the only time you will see this key. Store it securely.
+              Store this key securely. You can view or copy it later from the API Keys list.
             </p>
           </div>
           <div className="flex gap-2">
@@ -946,17 +1158,13 @@ export default function APIPageClient({ machineId }) {
               readOnly
               className="flex-1 font-mono text-sm"
             />
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              icon={copied === "created_key" ? "check" : "content_copy"}
               onClick={() => copy(createdKey, "created_key")}
-              className="flex w-11 shrink-0 items-center justify-center rounded-[10px] border border-border bg-surface-2 text-text-main transition-colors hover:bg-surface-3"
-              title={copied === "created_key" ? "Copied!" : "Copy"}
-              aria-label={copied === "created_key" ? "Copied!" : "Copy"}
             >
-              <span className="material-symbols-outlined text-[18px]">
-                {copied === "created_key" ? "check" : "content_copy"}
-              </span>
-            </button>
+              {copied === "created_key" ? "Copied!" : "Copy"}
+            </Button>
           </div>
           <Button onClick={() => setCreatedKey(null)} fullWidth>
             Done
@@ -1119,7 +1327,6 @@ export default function APIPageClient({ machineId }) {
         message={confirmState?.message}
         variant="danger"
       />
-      </div>
     </div>
   );
 }

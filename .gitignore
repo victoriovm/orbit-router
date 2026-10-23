@@ -88,6 +88,7 @@ graphify-out/*
 .next-analyze/*
 
 .openclaude
+.scratch/
 # Kiro local workspace state
 .kiro/
 
@@ -103,4 +104,3 @@ graphify-out/*
 .start-dev.ps1
 start-dev-silent.cjs
 debug.log
-.zcode/
