@@ -1006,7 +1006,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > kimi → headers (ap
     "X-Msh-Device-Model": "Windows x64",
     "X-Msh-Device-Name": "<VOLATILE>",
     "X-Msh-Platform": "9router",
-    "X-Msh-Version": "0.5.109",
+    "X-Msh-Version": "0.5.111",
     "x-api-key": "<CRED>",
   },
   "nonStream": {
@@ -1017,7 +1017,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > kimi → headers (ap
     "X-Msh-Device-Model": "Windows x64",
     "X-Msh-Device-Name": "<VOLATILE>",
     "X-Msh-Platform": "9router",
-    "X-Msh-Version": "0.5.109",
+    "X-Msh-Version": "0.5.111",
     "x-api-key": "<CRED>",
   },
   "oauth": {
@@ -1029,7 +1029,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > kimi → headers (ap
     "X-Msh-Device-Model": "Windows x64",
     "X-Msh-Device-Name": "<VOLATILE>",
     "X-Msh-Platform": "9router",
-    "X-Msh-Version": "0.5.109",
+    "X-Msh-Version": "0.5.111",
     "x-api-key": "<CRED>",
   },
 }
@@ -1566,6 +1566,25 @@ exports[`GOLDEN buildHeaders (default executor providers) > qoder-cn → headers
 `;
 
 exports[`GOLDEN buildHeaders (default executor providers) > runanywhere → headers (apiKey / oauth) 1`] = `
+{
+  "apiKey": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+  "nonStream": {
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+  "oauth": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+}
+`;
+
+exports[`GOLDEN buildHeaders (default executor providers) > runcrate → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
     "Accept": "text/event-stream",
@@ -2392,6 +2411,13 @@ exports[`GOLDEN buildUrl (default executor providers) > runanywhere → url (str
 {
   "nonStream": "https://inference.runanywhere.ai/v1/chat/completions",
   "stream": "https://inference.runanywhere.ai/v1/chat/completions",
+}
+`;
+
+exports[`GOLDEN buildUrl (default executor providers) > runcrate → url (stream + non-stream) 1`] = `
+{
+  "nonStream": "https://api.runcrate.ai/v1/chat/completions",
+  "stream": "https://api.runcrate.ai/v1/chat/completions",
 }
 `;
 
