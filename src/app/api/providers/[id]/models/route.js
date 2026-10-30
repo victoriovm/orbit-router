@@ -15,6 +15,7 @@ import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { resolveClineModels, resolveClinepassModels } from "open-sse/services/clinepassModels.js";
 import { discoverModalModels } from "open-sse/services/modalModels.js";
 import { NOUS_MODELS_URL, normalizeNousModels } from "open-sse/services/nous.js";
+import { parseVultrModels } from "open-sse/services/vultrModels.js";
 import codexProvider from "open-sse/providers/registry/codex.js";
 
 const GEMINI_CLI_MODELS_URL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
@@ -379,6 +380,12 @@ const PROVIDER_MODELS_CONFIG = {
   nvidia: createOpenAIModelsConfig("https://integrate.api.nvidia.com/v1/models"),
   assemblyai: createOpenAIModelsConfig("https://api.assemblyai.com/v1/models"),
   "vercel-ai-gateway": createOpenAIModelsConfig("https://ai-gateway.vercel.sh/v1/models"),
+  // Vultr serves one catalogue for every modality (chat, TTS, ASR, image,
+  // video, rerank, embeddings) — keep only text-in/text-out chat models.
+  vultr: {
+    ...createOpenAIModelsConfig("https://api.vultrinference.com/v1/models"),
+    parseResponse: parseVultrModels,
+  },
   // OpenAI-compatible aggregators.
   tokenharbor: createOpenAIModelsConfig("https://tokenharbor.ai/v1/models"),
   dahl: createOpenAIModelsConfig("https://inference.dahl.global/v1/models"),
