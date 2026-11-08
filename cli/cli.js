@@ -25,7 +25,53 @@ function waitServerReady(port, { timeoutMs = 15000, intervalMs = 150 } = {}) {
   });
 }
 
+// Native spinner - no external dependency
+function createSpinner(text) {
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let i = 0;
+  let interval = null;
+  let currentText = text;
+  return {
+    start() {
+      if (process.stdout.isTTY) {
+        process.stdout.write(`\r${frames[0]} ${currentText}`);
+        interval = setInterval(() => {
+          process.stdout.write(`\r${frames[i++ % frames.length]} ${currentText}`);
+        }, 80);
+      }
+      return this;
+    },
+    stop() {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+      if (process.stdout.isTTY) {
+        process.stdout.write("\r\x1b[K");
+      }
+    },
+    succeed(msg) {
+      this.stop();
+      console.log(`✅ ${msg}`);
+    },
+    fail(msg) {
+      this.stop();
+      console.log(`❌ ${msg}`);
+    }
+  };
+}
+
 const pkg = require("./package.json");
+const {
+  getPidFilePath,
+  writePidRecord,
+  readPidRecord,
+  removePidRecordIfOwner,
+  stopRecordedInstance,
+  isPortInUse,
+  waitForPortFree,
+  waitForPidsExit,
+} = require("./src/cli/utils/launcherProcess");
 const { ensureSqliteRuntime, buildEnvWithRuntime } = require("./hooks/sqliteRuntime");
 const { ensureTrayRuntime } = require("./hooks/trayRuntime");
 const args = process.argv.slice(2);
@@ -86,6 +132,10 @@ function getDisplayHost() {
   return host === DEFAULT_HOST ? "localhost" : host;
 }
 const MAX_PORT_ATTEMPTS = 10;
+// Upper bounds for waiting on killed processes / a released port. Both waits
+// return as soon as the condition holds, so the common case costs nothing.
+const PROCESS_EXIT_WAIT_MS = 1000;
+const PORT_RELEASE_WAIT_MS = 3000;
 // Identifiers for killAllAppProcesses - only kill 9router specifically
 const PROCESS_IDENTIFIERS = [
   '9router'  // Only package name - avoid killing other apps
@@ -175,49 +225,43 @@ function killTunnelByPidFile() {
   killByPidFile(path.join(tunnelDir, "tailscale.pid"));
 }
 
-// Kill cloudflared whose --url targets this app's port (covers stale PID file case)
+// Kill cloudflared whose --url targets this app's port (covers stale PID file case).
+// Runs the process scan asynchronously so it never blocks launcher startup.
 function killCloudflaredByAppPort(appPort) {
-  if (!appPort) return [];
+  if (!appPort) return;
   const portMatchers = [`localhost:${appPort}`, `127.0.0.1:${appPort}`];
-  const pids = [];
-  try {
-    if (process.platform === "win32") {
-      const psCmd = `powershell -NonInteractive -WindowStyle Hidden -Command "Get-WmiObject Win32_Process -Filter 'Name=\\"cloudflared.exe\\"' | Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation"`;
-      const output = execSync(psCmd, { encoding: "utf8", windowsHide: true, timeout: 5000 });
-      const lines = output.split("\n").slice(1).filter(l => l.trim());
-      lines.forEach(line => {
-        if (portMatchers.some(m => line.includes(m))) {
-          const match = line.match(/^"(\d+)"/);
-          if (match && match[1]) pids.push(match[1]);
-        }
-      });
-    } else {
-      const output = execSync("ps -eo pid,command 2>/dev/null", { encoding: "utf8", timeout: 5000 });
-      output.split("\n").forEach(line => {
-        if (line.includes("cloudflared") && portMatchers.some(m => line.includes(m))) {
-          const parts = line.trim().split(/\s+/);
-          const pid = parts[0];
-          if (pid && !isNaN(pid)) pids.push(pid);
-        }
-      });
-    }
-  } catch { }
-  return pids;
+  const isWin = process.platform === "win32";
+  const scanCmd = isWin
+    ? `powershell -NonInteractive -WindowStyle Hidden -Command "Get-WmiObject Win32_Process -Filter 'Name=\\"cloudflared.exe\\"' | Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation"`
+    : "ps -eo pid,command 2>/dev/null";
+  exec(scanCmd, { encoding: "utf8", windowsHide: true, timeout: 5000 }, (err, output) => {
+    if (err || !output) return;
+    const pids = [];
+    const lines = isWin ? output.split("\n").slice(1) : output.split("\n");
+    lines.forEach(line => {
+      if (!portMatchers.some(m => line.includes(m))) return;
+      if (isWin) {
+        const match = line.match(/^"(\d+)"/);
+        if (match) pids.push(Number(match[1]));
+      } else if (line.includes("cloudflared")) {
+        const pid = Number(line.trim().split(/\s+/)[0]);
+        if (Number.isSafeInteger(pid) && pid > 0) pids.push(pid);
+      }
+    });
+    pids.forEach(pid => {
+      try {
+        if (isWin) execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore", windowsHide: true, timeout: 3000 });
+        else process.kill(pid, "SIGKILL");
+      } catch { }
+    });
+  });
 }
 
-// Kill all 9router processes
-function killAllAppProcesses(appPort) {
+// Kill all 9router processes (full machine-wide scan — slow on Windows, so the
+// launcher only uses it as a fallback; see stopPreviousInstance).
+function killAllAppProcesses() {
   return new Promise((resolve) => {
     try {
-      // Background: MITM + tunnel/cloudflared run on separate ports/processes —
-      // killing them doesn't free the app port, so don't block the critical path.
-      // Server-side MITM manager has stale-lock recovery and starts deferred (~3s).
-      setImmediate(() => {
-        try { killProxyByPidFile(); } catch {}
-        try { killTunnelByPidFile(); } catch {}
-        try { killCloudflaredByAppPort(appPort); } catch {}
-      });
-
       const platform = process.platform;
       let pids = [];
 
@@ -291,8 +335,8 @@ function killAllAppProcesses(appPort) {
           }
         });
 
-        // Wait for processes to fully terminate
-        setTimeout(() => resolve(), 1000);
+        // Wait for processes to terminate — returns as soon as they are gone.
+        waitForPidsExit(pids.map(Number), { timeoutMs: PROCESS_EXIT_WAIT_MS }).then(() => resolve());
       } else {
         resolve();
       }
@@ -389,8 +433,9 @@ function killProcessOnPort(port) {
         }
       }
 
-      // Wait for port to be released
-      setTimeout(() => resolve(), 500);
+      // Wait for the port only when something was killed; return once it is free.
+      if (pid) waitForPortFree(port, { timeoutMs: PORT_RELEASE_WAIT_MS }).then(() => resolve());
+      else resolve();
     } catch (err) {
       // Silent fail - continue anyway
       resolve();
@@ -448,10 +493,36 @@ if (!fs.existsSync(serverPath)) {
   process.exit(1);
 }
 
-// Start server immediately.
-killAllAppProcesses(port)
-  .then(() => killProcessOnPort(port))
-  .then(() => startServer());
+const launcherPidFile = getPidFilePath(getAppDataDir());
+
+// Stop the previous launcher by its PID record (fast path). The machine-wide
+// process scan (~0.5s per PowerShell call on Windows) runs only when the port is
+// still occupied afterwards, e.g. by a launcher from a version without a record.
+async function stopPreviousInstance(appPort) {
+  // MITM + tunnel run on separate ports/processes — killing them doesn't free the
+  // app port, so keep them off the critical path.
+  // Server-side MITM manager has stale-lock recovery and starts deferred (~3s).
+  setImmediate(() => {
+    try { killProxyByPidFile(); } catch {}
+    try { killTunnelByPidFile(); } catch {}
+    try { killCloudflaredByAppPort(appPort); } catch {}
+  });
+
+  const killed = stopRecordedInstance(readPidRecord(launcherPidFile));
+  try { fs.unlinkSync(launcherPidFile); } catch { }
+  if (killed.length > 0) await waitForPidsExit(killed, { timeoutMs: PROCESS_EXIT_WAIT_MS });
+
+  if (!(await isPortInUse(appPort))) return;
+  await killAllAppProcesses();
+  await killProcessOnPort(appPort);
+}
+
+// Show progress immediately; cleanup runs before the server starts.
+const startupSpinner = createSpinner(`Starting ${APP_NAME} v${pkg.version}...`).start();
+stopPreviousInstance(port).then(() => {
+  startupSpinner.stop();
+  startServer();
+});
 
 // Show interface selection menu
 async function showInterfaceMenu() {
@@ -510,7 +581,7 @@ function startServer() {
   function spawnServer() {
     serverStartTime = Date.now();
     crashLog = [];
-    const child = spawn(RUNTIME, ["--dns-result-order=ipv4first", "--max-old-space-size=6144", serverPath], {
+    const child = spawn(RUNTIME, ["--max-old-space-size=6144", serverPath], {
       cwd: standaloneDir,
       stdio: showLog ? "inherit" : ["ignore", "ignore", "pipe"],
       detached: true,
@@ -528,16 +599,23 @@ function startServer() {
         if (crashLog.length > CRASH_LOG_LINES) crashLog = crashLog.slice(-CRASH_LOG_LINES);
       });
     }
+    // Lets the next launch stop exactly this instance without a process scan.
+    try {
+      writePidRecord(launcherPidFile, { cliPid: process.pid, serverPid: child.pid || null, port, exe: path.basename(RUNTIME) });
+    } catch { /* non-fatal: next launch falls back to the port check */ }
     return child;
   }
 
   let server = spawnServer();
+  const bootSpinner = createSpinner("Starting server...");
 
   // Cleanup function - force kill server process
   let isCleaningUp = false;
   function cleanup() {
     if (isCleaningUp) return;
     isCleaningUp = true;
+    bootSpinner.stop();
+    removePidRecordIfOwner(launcherPidFile, process.pid);
     try {
       // Kill tray if running
       try {
@@ -586,7 +664,7 @@ function startServer() {
   });
 
   // Initialize tray icon (runs alongside TUI)
-  const initTrayIcon = () => {
+  const initTrayIcon = (callbacks = {}) => {
     try {
       const { initTray } = require("./src/cli/tray/tray");
       initTray({
@@ -597,10 +675,12 @@ function startServer() {
           cleanup();
           setTimeout(() => process.exit(0), 100);
         },
-        onOpenDashboard: () => openBrowser(url)
+        onOpenDashboard: () => openBrowser(url),
+        ...callbacks
       });
     } catch (err) {
       // Tray not available - continue without it
+      if (typeof callbacks.onError === "function") callbacks.onError(err);
     }
   };
 
@@ -613,17 +693,32 @@ function startServer() {
     console.log(`\n🚀 ${pkg.name} v${pkg.version}`);
     console.log(`Server: http://${displayHost}:${port}`);
 
+    bootSpinner.start();
     waitServerReady(port).then(() => {
-      initTrayIcon();
-      console.log("\n💡 Router is now running in system tray. Close this terminal if you want.");
-      console.log("   Right-click tray icon to open dashboard or quit.\n");
+      bootSpinner.stop();
+      // Only claim the tray is running once the tray process actually became
+      // ready. Reporting it up front hid every failure (missing
+      // libappindicator, EACCES, wrong architecture) behind a success message.
+      initTrayIcon({
+        onReady: () => {
+          console.log("\n💡 Router is now running in system tray. Close this terminal if you want.");
+          console.log("   Right-click tray icon to open dashboard or quit.\n");
+        },
+        onError: (err) => {
+          console.log("\n⚠️  No tray icon — the server keeps running.");
+          if (err?.message) console.log(`   ${err.message.split("\n").join("\n   ")}`);
+          console.log(`   Dashboard: http://${displayHost}:${port}\n`);
+        }
+      });
     });
 
     return;
   }
 
   // Wait for server to be ready, then show interface menu loop + tray
+  bootSpinner.start();
   waitServerReady(port).then(async () => {
+    bootSpinner.stop();
     // Start tray icon alongside TUI
     initTrayIcon();
 
@@ -669,7 +764,9 @@ function startServer() {
           // Windows/Linux: spawn detached bgProcess (systray works fine in child)
           console.log(`\n⏳ Starting background process... (tray icon will appear in ~3s)`);
 
-          const bgProcess = spawn(process.execPath, ["--dns-result-order=ipv4first", __filename, "--tray", "-p", port.toString()], {
+          // No --dns-result-order: happy eyeballs on the undici Agent races both
+          // address families, so a broken IPv4 or IPv6 path no longer pins the tray.
+          const bgProcess = spawn(process.execPath, [__filename, "--tray", "-p", port.toString()], {
             detached: true,
             stdio: "ignore",
             windowsHide: true,
