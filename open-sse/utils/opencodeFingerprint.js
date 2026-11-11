@@ -23,15 +23,24 @@ import path from "node:path";
 /** Names required by the upstream free-tier gate. */
 export const OPENCODE_FINGERPRINT_TOOLS = ["read", "shell"];
 
-// A second, purely textual gate on the same route: a declared tool name
-// containing "terminal" (case-insensitive substring) is answered 429
-// FreeUsageLimitError regardless of quota, IP, session or payload size, while
-// the same body with only that name changed answers normally
-// (decolua/9router#5319). Only `tools[]` is inspected — history and system
-// prompt are not — so the declaration travels under an alias and the caller's
-// name is restored on the way back, like a fingerprint-name collision.
-export const GATED_TOOL_NAME_RE = /terminal/i;
-const GATED_TOOL_ALIAS = "run_command";
+// Textual gates on the same route: a declared tool whose name matches one of
+// these rules is answered 429 FreeUsageLimitError regardless of quota, IP,
+// session or payload size, while the same body with only that name changed
+// answers normally (decolua/9router#5319). Only `tools[]` is inspected —
+// history and system prompt are not — so the declaration travels under an
+// alias and the caller's name is restored on the way back, like a
+// fingerprint-name collision.
+//
+// - /terminal/i: any tool NAME containing "terminal".
+// - ScheduleWakeup / ReportFindings: Claude Code 2.1.322 host-UI tool names.
+//   Either name passes alone, but the pair declared together answers 429 in
+//   ~300ms (live bisect 2026-11-11); renaming either defuses it. Both travel
+//   under aliases so the pair can never appear on the wire together.
+export const GATED_TOOL_RULES = [
+  { re: /terminal/i, alias: "run_command" },
+  { re: /^ScheduleWakeup$/, alias: "schedule_wakeup" },
+  { re: /^ReportFindings$/, alias: "report_findings" },
+];
 
 // Verbatim from the OpenCode v2.0.26 CLI. Upstream compares description and
 // parameters, so do not reword or reformat these.
@@ -164,9 +173,10 @@ export function concealFingerprintToolNames(tools) {
     }
 
     const name = toolNameOf(tool);
-    if (GATED_TOOL_NAME_RE.test(name)) {
-      let alias = GATED_TOOL_ALIAS;
-      for (let i = 2; taken.has(alias); i++) alias = `${GATED_TOOL_ALIAS}${i}`;
+    const rule = GATED_TOOL_RULES.find((r) => r.re.test(name));
+    if (rule) {
+      let alias = rule.alias;
+      for (let i = 2; taken.has(alias); i++) alias = `${rule.alias}${i}`;
       taken.add(alias);
       map.set(alias, name);
       out.push(withToolName(tool, alias));
