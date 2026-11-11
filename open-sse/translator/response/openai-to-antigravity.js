@@ -126,3 +126,8 @@ export function openaiToAntigravityResponse(chunk, state) {
 
 // Register
 register(FORMATS.OPENAI, FORMATS.ANTIGRAVITY, null, openaiToAntigravityResponse);
+// Gemini-family clients speak the same candidates/parts shape; without these
+// registrations an OpenAI upstream response leaks raw OpenAI chunks to them.
+register(FORMATS.OPENAI, FORMATS.GEMINI, null, openaiToAntigravityResponse);
+register(FORMATS.OPENAI, FORMATS.GEMINI_CLI, null, openaiToAntigravityResponse);
+register(FORMATS.OPENAI, FORMATS.VERTEX, null, openaiToAntigravityResponse);

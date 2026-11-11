@@ -32,8 +32,19 @@ export function isStaleSocketError(error) {
 // bundled-in-Node global fetch), so originalFetch/globalThis.fetch is not an
 // option once we build our own Agents.
 let undiciFetch = null;
+let undiciFormData = null;
 async function rawFetch(url, options) {
   undiciFetch ??= (await import("undici")).fetch;
+  if (options?.body && typeof options.body.append === "function" && typeof options.body.entries === "function") {
+    // Node's global FormData is a different class than the undici package's.
+    // Handing it to undici's fetch makes the body serialize as text/plain
+    // instead of multipart/form-data (upstream issue #5525), so rebuild the
+    // body with the undici FormData class before dispatching.
+    undiciFormData ??= (await import("undici")).FormData;
+    const rebuilt = new undiciFormData();
+    for (const [key, value] of options.body.entries()) rebuilt.append(key, value);
+    options = { ...options, body: rebuilt };
+  }
   return undiciFetch(url, options);
 }
 
@@ -356,7 +367,15 @@ async function fetchWithTlsFallback(url, options, proxyUrl, forceFreshSocket = f
   try {
     // Protocol adapters may need Node's HTTP/1 transport on the direct path.
     // Keep proxy/no-proxy resolution and strict-proxy enforcement here.
-    if (!proxyUrl && options.directFetch) return await options.directFetch(url, options);
+    // Adapters that opt in (`proxyThroughAdapter`) own the proxy too: wreq-js
+    // tunnels http/https/socks5 at the transport layer, so the resolved proxy
+    // URL rides the adapter (TLS impersonation intact) instead of being
+    // silently replaced by an undici dispatcher. Adapters without the flag
+    // (e.g. codexHttpFetch) keep today's behavior: they are only consulted on
+    // the direct path, never handed a proxy they cannot honour.
+    if (options.directFetch && (options.proxyThroughAdapter || !proxyUrl)) {
+      return await options.directFetch(url, { ...options, proxyUrl }, proxyUrl || undefined);
+    }
     const dispatcher = await getDispatcher(proxyUrl, false, forceFreshSocket);
     return await rawFetch(url, { ...options, dispatcher });
   } catch (err) {
@@ -502,6 +521,9 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
       if (proxyOptions?.strictProxy === true) {
         throw new Error(`[ProxyFetch] Proxy required but failed (strictProxy=true): ${proxyError.message}`);
       }
+      // Proxy-opted adapters fail closed too: a direct replay would silently
+      // leave both the selected proxy AND the transport identity behind.
+      if (options.directFetch && options.proxyThroughAdapter) throw proxyError;
       console.warn(`[ProxyFetch] Proxy failed, falling back to direct: ${proxyError.message}`);
       return fetchWithTlsFallback(url, options, null, forceFreshSocket);
     }

@@ -166,7 +166,10 @@ export class BaseExecutor {
           signal: mergedSignal,
           // Protocol adapters that need their own transport (opencode's TLS
           // fingerprint) override the direct path; proxies still take priority.
-          ...(directFetch ? { directFetch } : {}),
+          // Such adapters own their transport, so they also own the proxy:
+          // proxyThroughAdapter hands the resolved proxy URL to the adapter
+          // instead of swapping it for an undici dispatcher.
+          ...(directFetch ? { directFetch, proxyThroughAdapter: true } : {}),
         }, effectiveProxyOptions);
         clearTimeout(connectTimer);
         const ct = response.headers?.get?.("content-type") || "";

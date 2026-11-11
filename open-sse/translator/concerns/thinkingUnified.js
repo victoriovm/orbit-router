@@ -145,10 +145,14 @@ function resolveFormat(targetFormat, model, provider) {
   if (providerFmt) return providerFmt;
   const caps = getCapabilitiesForModel(provider, model);
   const isOpenAIWire = targetFormat === "openai" || targetFormat === "openai-responses";
-  if (caps.thinkingFormat && !(isOpenAIWire && NATIVE_ONLY_FORMATS.has(caps.thinkingFormat))) {
-    return caps.thinkingFormat;
+  const fmt = caps.thinkingFormat && !(isOpenAIWire && NATIVE_ONLY_FORMATS.has(caps.thinkingFormat))
+    ? caps.thinkingFormat
+    : FORMAT_TO_NATIVE[targetFormat] || "openai";
+  // Custom Responses nodes (e.g. Bedrock Mantle) have no registry transport override.
+  if (fmt === "openai" && targetFormat === "openai-responses" && isOpenAICompatibleNode(provider)) {
+    return "openai-responses";
   }
-  return FORMAT_TO_NATIVE[targetFormat] || "openai";
+  return fmt;
 }
 
 // Convert unified config to a budget number (for budget-based formats).
@@ -470,7 +474,12 @@ export function applyThinking(targetFormat, model, body, provider = null, intent
   // comes back at all; keep what the client asked for instead of resetting it.
   // An OpenAI-shaped client's ask arrives via the captured intent instead.
   const display = typeof body.thinking?.display === "string" ? body.thinking.display : intent?.display;
+  const reasoning = body.reasoning;
   stripAll(body);
+  // Keep the client's other Responses reasoning fields (summary, …); only effort is rewritten.
+  if (fmt === "openai-responses" && reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
+    body.reasoning = reasoning;
+  }
   applyFormat(fmt, body, cfg, caps, supportedLevels, display, cleanModel, isOpenAICompatibleNode(provider));
   return body;
 }

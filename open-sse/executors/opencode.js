@@ -3,6 +3,7 @@ import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
 import {
   FETCH_CONNECT_TIMEOUT_MS,
+  HTTP_STATUS,
   MAX_RETRY_AFTER_MS,
   MEMORY_CONFIG,
   MUSE_SPARK_CONNECT_TIMEOUT_MS,
@@ -224,6 +225,34 @@ function isMessagesModel(model) {
   return MESSAGES_MODELS.has(baseModelId(model));
 }
 
+// Invalidate the pinned session ids for one identity after an upstream
+// 429/403: once the free gate flags a specific id, every reuse fails in
+// ~300ms until the process restarts (#5559). Dropping both caches lets the
+// next request re-mint. Mirrors resolveOpencodeSession's key choices so the
+// entry actually used is the one removed; fail-open on any surprise shape.
+export function resetOpencodeSessionCaches(options = {}) {
+  const { credentials, providerSessionId, clientTool } = options || {};
+  try {
+    stableOpencodeSessions.delete(identityKey(credentials || {}));
+
+    const headers = credentials?.rawHeaders || {};
+    const native = nativeSession(headers); // passthrough path touches no cache
+    let incoming = null;
+    if (!native) {
+      for (const [key, value] of Object.entries(headers)) {
+        if (key.toLowerCase() === SESSION_HEADER) {
+          incoming = normalizeSession(value);
+          break;
+        }
+      }
+    }
+    const hinted = incoming || normalizeSession(providerSessionId);
+    if (hinted) translatedOpencodeSessions.delete(`${clientTool || "generic"}\0${hinted}`);
+  } catch {
+    // best-effort: a stale id is strictly better than a dropped request
+  }
+}
+
 function resolveOpencodeSession(body, credentials, providerSessionId, clientTool) {
   const headers = credentials?.rawHeaders || {};
   const native = nativeSession(headers);
@@ -412,19 +441,36 @@ export class OpenCodeExecutor extends BaseExecutor {
   // The free gate keys on the TLS ClientHello, so a native Node fetch is refused
   // no matter how faithful the body is. Route through the impersonating client
   // and keep proxy handling on the existing path (proxyAwareFetch delegates to
-  // `directFetch` when no proxy is configured). Fail-open: without wreq-js the
-  // request still goes out on native fetch instead of erroring here.
+  // `directFetch` when no proxy is configured, and passes the resolved proxy
+  // URL through when one is). Fail-open: without wreq-js the request still goes
+  // out on native fetch instead of erroring here.
   async execute(args) {
     const credentials = this.prepareRequestCredentials(args);
-    return super.execute({
+    const result = await super.execute({
       ...args,
       credentials,
-      directFetch: (url, options) => opencodeTlsFetch(url, {
+      directFetch: (url, options, proxyUrl) => opencodeTlsFetch(url, {
         method: options.method,
         headers: options.headers,
         body: options.body,
-      }, { signal: options.signal }),
+      }, { signal: options.signal, proxyUrl }),
     });
+
+    // Upstream free-tier quota is accounted per session id. When the pinned
+    // canonical/translated id comes back 429 (flagged or over budget) or 403
+    // (FreeTierError), drop the cached ids so the NEXT request mints a fresh
+    // time-anchored one instead of reusing the dead id forever (#5559).
+    // Retries inside super.execute keep the pinned id by design; only a final
+    // failure invalidates. Does not help genuine per-IP quota exhaustion.
+    const status = result?.response?.status;
+    if (status === HTTP_STATUS.TOO_MANY_REQUESTS || status === HTTP_STATUS.FORBIDDEN) {
+      resetOpencodeSessionCaches({
+        credentials,
+        providerSessionId: args?.providerSessionId,
+        clientTool: args?.clientTool,
+      });
+    }
+    return result;
   }
 
   // Muse Spark only: Zen rate-limits per account (worth waiting out in place)
