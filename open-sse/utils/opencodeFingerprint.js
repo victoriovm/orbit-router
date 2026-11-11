@@ -30,8 +30,53 @@ export const OPENCODE_FINGERPRINT_TOOLS = ["read", "shell"];
 // (decolua/9router#5319). Only `tools[]` is inspected — history and system
 // prompt are not — so the declaration travels under an alias and the caller's
 // name is restored on the way back, like a fingerprint-name collision.
-export const GATED_TOOL_NAME_RE = /terminal/i;
-const GATED_TOOL_ALIAS = "run_command";
+export const GATED_TOOL_RULES = [
+  { re: /terminal/i, alias: "run_command" },
+];
+
+export const CLAUDE_CODE_GATED_TOOL_RULES = [
+  { re: /^ScheduleWakeup$/, alias: "schedule_wakeup" },
+  { re: /^ReportFindings$/, alias: "report_findings" },
+];
+
+const CLAUDE_CODE_MARKERS = [
+  /You are Claude Code\b/,
+  /Anthropic's Claude Agent SDK/,
+];
+
+export function isClaudeCodeRequestBody(body) {
+  try {
+    if (!body || typeof body !== "object") return false;
+    const sys = body.system;
+    let systemText = typeof sys === "string"
+      ? sys
+      : Array.isArray(sys)
+        ? sys.map((block) => (typeof block?.text === "string" ? block.text : "")).join("\n")
+        : "";
+    // Translated chat bodies carry the system prompt as a message, not as
+    // `system` (claude→openai moved it there).
+    if (!systemText && Array.isArray(body.messages)) {
+      const first = body.messages[0];
+      systemText = first?.role === "system"
+        ? (typeof first.content === "string"
+          ? first.content
+          : Array.isArray(first.content)
+            ? first.content.map((part) => (typeof part?.text === "string" ? part.text : "")).join("\n")
+            : "")
+        : "";
+    }
+    if (CLAUDE_CODE_MARKERS.some((re) => re.test(systemText))) return true;
+
+    const userId = body.metadata?.user_id;
+    if (typeof userId === "string") {
+      if (/^user_.+_account_.+_session_/.test(userId)) return true;
+      if (userId.includes('"device_id"') && userId.includes('"session_id"')) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 // Verbatim from the OpenCode v2.0.26 CLI. Upstream compares description and
 // parameters, so do not reword or reformat these.
@@ -150,12 +195,13 @@ function withFingerprintDefinition(tool, key) {
  * @param {Array} tools
  * @returns {{ tools: Array, map: Map<string,string> }} map: sent name -> original name
  */
-export function concealFingerprintToolNames(tools) {
+export function concealFingerprintToolNames(tools, { extraRules = [] } = {}) {
   const map = new Map();
   if (!Array.isArray(tools) || tools.length === 0) return { tools, map };
 
   const taken = new Set(tools.map(toolNameOf));
   const seen = new Set();
+  const rules = extraRules.length ? [...GATED_TOOL_RULES, ...extraRules] : GATED_TOOL_RULES;
   const out = [];
   for (const tool of tools) {
     if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
@@ -164,9 +210,10 @@ export function concealFingerprintToolNames(tools) {
     }
 
     const name = toolNameOf(tool);
-    if (GATED_TOOL_NAME_RE.test(name)) {
-      let alias = GATED_TOOL_ALIAS;
-      for (let i = 2; taken.has(alias); i++) alias = `${GATED_TOOL_ALIAS}${i}`;
+    const rule = rules.find((r) => r.re.test(name));
+    if (rule) {
+      let alias = rule.alias;
+      for (let i = 2; taken.has(alias); i++) alias = `${rule.alias}${i}`;
       taken.add(alias);
       map.set(alias, name);
       out.push(withToolName(tool, alias));
@@ -411,7 +458,9 @@ export function applyEnvFingerprint(body, flat, { claude = false } = {}) {
 export function applyFingerprintTools(body, flat, { claude = false } = {}) {
   if (!body || typeof body !== "object") return new Map();
 
-  const { tools, map } = concealFingerprintToolNames(body.tools);
+  const extraRules = isClaudeCodeRequestBody(body) ? CLAUDE_CODE_GATED_TOOL_RULES : [];
+
+  const { tools, map } = concealFingerprintToolNames(body.tools, { extraRules });
   body.tools = Array.isArray(tools) ? tools : [];
   const appended = appendMissingFingerprintTools(body.tools, flat);
   retargetToolChoice(body, map);
