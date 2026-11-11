@@ -14,7 +14,7 @@ import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { useNotificationStore } from "@/store/notificationStore";
 import { translate } from "@/i18n/runtime";
 import { fetchSuggestedModels } from "@/shared/utils/providerModelsFetcher";
-import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
+import { applyQoderModelNames, getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
 import ModelRow from "./ModelRow";
 import PassthroughModelsSection from "./PassthroughModelsSection";
 import CompatibleModelsSection from "./CompatibleModelsSection";
@@ -33,9 +33,9 @@ import { getScheduleSlotLabels } from "@/shared/services/quotaPingSchedule";
 const ONE_BY_ONE_DELAY_MS = 1000;
 
 // Providers whose model list is fetched per-connection from /api/providers/[id]/models
-// instead of the static registry (cursor/cline/clinepass/zed). Cline's two feeds are
+// instead of (or as a fallback over) the static registry. Cline's two feeds are
 // public; the others resolve with the connection's credentials.
-const LIVE_CATALOG_PROVIDER_IDS = ["cursor", "cline", "clinepass", "zed"];
+const LIVE_CATALOG_PROVIDER_IDS = ["cursor", "cline", "clinepass", "zed", "claude", "commandcode"];
 
 const MCODE_LEASE_PROVIDERS = new Set(["minimax-code", "minimax-code-global"]);
 
@@ -171,7 +171,7 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
   const staticModels = getModelsByProviderId(providerId);
   const models = LIVE_CATALOG_PROVIDER_IDS.includes(providerId) && liveModels.length > 0
     ? liveModels
-    : staticModels;
+    : applyQoderModelNames(staticModels, customModels, getProviderAlias(providerId));
   const providerAlias = getProviderAlias(providerId);
   
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
