@@ -8,7 +8,8 @@
 //   2. proxyFetch: the resolved proxy URL is passed to the directFetch adapter
 //      when the adapter opts in via `proxyThroughAdapter` (fork adaptation:
 //      without opt-in, adapters like codexHttpFetch cannot honour a proxy and
-//      must keep today's undici-dispatcher behavior).
+//      must keep today's undici-dispatcher behavior). A `proxyCapable` adapter
+//      is routed the same way on the proxy path, before the undici dispatcher.
 //   3. opencode executor: opts in and forwards the proxy URL it is handed.
 //
 // Regression class: "the pool is configured, a proxy was selected, and the
@@ -141,6 +142,22 @@ describe("proxyAwareFetch delegates the proxy to the transport adapter", () => {
     expect(adapter.mock.calls[0][1].proxyUrl).toBe("socks5://127.0.0.1:9050");
   });
 
+  it("hands the resolved proxy URL to a proxyCapable directFetch instead of bypassing it", async () => {
+    const adapter = Object.assign(vi.fn().mockResolvedValue(new Response("ok", { status: 200 })), { proxyCapable: true });
+    const { proxyAwareFetch } = await import("../../open-sse/utils/proxyFetch.js");
+
+    await proxyAwareFetch("https://opencode.ai/inference/v1/chat/completions", {
+      method: "POST",
+      body: "{}",
+      directFetch: adapter,
+    }, { connectionProxyEnabled: true, connectionProxyUrl: "socks5://127.0.0.1:9050" });
+
+    expect(adapter).toHaveBeenCalledTimes(1);
+    // Third argument is the resolved proxy URL the adapter must tunnel through.
+    expect(adapter.mock.calls[0][2]).toBe("socks5://127.0.0.1:9050");
+    expect(adapter.mock.calls[0][1].proxyUrl).toBe("socks5://127.0.0.1:9050");
+  });
+
   it("does NOT hand a proxy to an adapter without the opt-in (codexStt guard)", async () => {
     const adapter = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
     const { proxyAwareFetch } = await import("../../open-sse/utils/proxyFetch.js");
@@ -157,6 +174,19 @@ describe("proxyAwareFetch delegates the proxy to the transport adapter", () => {
 
     const handedProxy = adapter.mock.calls.some((call) => call[2]);
     expect(handedProxy).toBe(false);
+  });
+
+  it("keeps a non-proxyCapable adapter off the proxy path so the proxy still carries it", async () => {
+    // codexHttpFetch-style adapter: owns the transport but knows nothing about
+    // proxies. Handing it the proxy URL would leave over the direct interface.
+    const adapter = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
+    const { proxyAwareFetch } = await import("../../open-sse/utils/proxyFetch.js");
+
+    await expect(proxyAwareFetch("https://invalid.invalid/a", { directFetch: adapter },
+      { connectionProxyEnabled: true, connectionProxyUrl: "socks5://127.0.0.1:1", strictProxy: true }))
+      .rejects.toThrow();
+
+    expect(adapter).not.toHaveBeenCalled();
   });
 
   it("respects no_proxy by not tunnelling an excluded host", async () => {
@@ -184,10 +214,10 @@ describe("proxyAwareFetch delegates the proxy to the transport adapter", () => {
   });
 
   it("fail-closed: strictProxy surfaces the adapter failure instead of falling back to direct", async () => {
-    const adapter = vi.fn().mockRejectedValue(new Error("proxy tunnel refused"));
+    const adapter = Object.assign(vi.fn().mockRejectedValue(new Error("proxy tunnel refused")), { proxyCapable: true });
     const { proxyAwareFetch } = await import("../../open-sse/utils/proxyFetch.js");
 
-    await expect(proxyAwareFetch("https://opencode.ai/a", { directFetch: adapter, proxyThroughAdapter: true },
+    await expect(proxyAwareFetch("https://opencode.ai/a", { directFetch: adapter },
       { connectionProxyEnabled: true, connectionProxyUrl: "socks5://127.0.0.1:9050", strictProxy: true }))
       .rejects.toThrow(/strictProxy=true/);
   });

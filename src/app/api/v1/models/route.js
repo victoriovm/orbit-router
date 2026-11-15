@@ -18,10 +18,12 @@ import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
 import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { discoverModalModels, listModalBaseUrls } from "open-sse/services/modalModels.js";
+import { resolveCommandCodeModels } from "open-sse/services/commandcodeModels.js";
 import { updateProviderConnection } from "@/lib/localDb";
 import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel, resolveModelCapabilities, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
+import { getThinkingLevels } from "open-sse/providers/thinkingLevels.js";
 import { FILTERS } from "../../providers/suggested-models/filters.js";
 
 function withTimeout(promise, ms) {
@@ -169,6 +171,13 @@ const LIVE_MODEL_RESOLVERS = {
   modal: async (conn) => {
     const models = await resolveModalLiveModels(conn);
     return models ? { models } : null;
+  },
+  // CommandCode's catalog is public and account-independent, so no per-connection
+  // credentials are needed — the connection only has to exist and be active.
+  commandcode: async () => {
+    const result = await resolveCommandCodeModels();
+    if (!result?.models?.length) return null;
+    return { models: result.models.map(({ id, name }) => ({ id, name })) };
   },
 };
 
@@ -699,6 +708,11 @@ export async function buildModelsList(kindFilter, options = {}) {
           // default standing in for a value we do not have. Flag it rather than
           // drop it: a wrong number still beats the client inventing a bigger one.
           if (!contextKnown) model.context_misconfig = true;
+          // Selectable reasoning levels (the set the dashboard picker shows) so clients
+          // can build their effort selector from the gateway instead of keeping a
+          // per-model table. Omitted when the model has no reasoning.
+          const thinkingLevels = getThinkingLevels(providerId, modelId);
+          if (Array.isArray(thinkingLevels) && thinkingLevels.length > 0) model.thinking_levels = thinkingLevels;
         }
         models.push(model);
       }

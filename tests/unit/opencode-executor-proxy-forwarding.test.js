@@ -15,7 +15,7 @@ describe("opencode executor forwards the resolved proxy", () => {
     tlsFetchMock.mockReset().mockResolvedValue(new Response("ok", { status: 200 }));
 
     const { OpenCodeExecutor } = await import("../../open-sse/executors/opencode.js");
-    const exec = new OpenCodeExecutor();
+    const exec = new OpenCodeExecutor("opencode", { baseUrl: "https://opencode.ai" });
 
     try {
       await exec.execute({

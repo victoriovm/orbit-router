@@ -14,7 +14,7 @@ import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { useNotificationStore } from "@/store/notificationStore";
 import { translate } from "@/i18n/runtime";
 import { fetchSuggestedModels } from "@/shared/utils/providerModelsFetcher";
-import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
+import { applyQoderModelNames, getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
 import ModelRow from "./ModelRow";
 import PassthroughModelsSection from "./PassthroughModelsSection";
 import CompatibleModelsSection from "./CompatibleModelsSection";
@@ -34,8 +34,10 @@ const ONE_BY_ONE_DELAY_MS = 1000;
 
 // Providers whose model list is fetched per-connection from /api/providers/[id]/models
 // instead of the static registry (cursor/cline/clinepass/zed). Cline's two feeds are
-// public; the others resolve with the connection's credentials.
-const LIVE_CATALOG_PROVIDER_IDS = ["cursor", "cline", "clinepass", "zed"];
+// public; the others resolve with the connection's credentials. The registry list for
+// these is only an offline fallback: the dashboard renders the live catalog when one
+// resolves, and falls back to the static rows otherwise.
+const LIVE_CATALOG_PROVIDER_IDS = ["cursor", "cline", "clinepass", "zed", "claude", "commandcode"];
 
 const MCODE_LEASE_PROVIDERS = new Set(["minimax-code", "minimax-code-global"]);
 
@@ -171,7 +173,7 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
   const staticModels = getModelsByProviderId(providerId);
   const models = LIVE_CATALOG_PROVIDER_IDS.includes(providerId) && liveModels.length > 0
     ? liveModels
-    : staticModels;
+    : applyQoderModelNames(staticModels, customModels, getProviderAlias(providerId));
   const providerAlias = getProviderAlias(providerId);
   
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
@@ -487,10 +489,11 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
     fetchDisabledModels();
   }, [fetchConnections, fetchAliases, fetchCustomModels, fetchDisabledModels]);
 
-  // Live per-connection catalogs (cursor, cline, clinepass, zed): the static
-  // registry carries no usable list, so resolve from the active connection.
-  // Cline/clinepass serve it without credentials (their feeds are public).
-  // Fires only when the provider id or connection list changes — no polling.
+  // Live per-connection catalogs (cursor, cline, clinepass, zed, claude,
+  // commandcode): the static registry carries no usable list, so resolve from
+  // the active connection. Cline/clinepass serve it without credentials (their
+  // feeds are public). Fires only when the provider id or connection list
+  // changes — no polling.
   const isLiveCatalogProvider = LIVE_CATALOG_PROVIDER_IDS.includes(providerId);
   useEffect(() => {
     if (!isLiveCatalogProvider) {
@@ -1974,10 +1977,8 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
           isOpen={showAddCustomModel}
           providerAlias={providerStorageAlias}
           providerDisplayAlias={providerDisplayAlias}
-          onSave={async (modelId, caps, transport) => {
-            // caps.stt is a UI-only flag; the API accepts transports only on
-            // type "stt" records, so the save derives the type from it.
-            await handleAddCustomModel(modelId, caps?.stt ? "stt" : "llm", providerStorageAlias, caps, transport);
+          onSave={async (modelId, type, caps, transport) => {
+            await handleAddCustomModel(modelId, type, providerStorageAlias, caps, transport);
             setShowAddCustomModel(false);
           }}
           onClose={() => setShowAddCustomModel(false)}
