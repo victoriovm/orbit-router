@@ -14,7 +14,7 @@ const provider = {
     if (redirectUri !== CHATGPT_REDIRECT_URI) throw new Error("Invalid ChatGPT callback URL");
     const params = new URLSearchParams({
       client_id: config.clientId,
-      agent_name_hint: "Orbit Router",
+      agent_name_hint: "Pi",
       ext_agent_host_id: `urn:uuid:${hostId}`,
       response_type: "code",
       redirect_uri: redirectUri,

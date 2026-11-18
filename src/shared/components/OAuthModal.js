@@ -651,6 +651,21 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     try {
       setError(null);
 
+      if (provider === "openai-chatgpt" && authMode === "pi-json") {
+        const res = await fetch("/api/oauth/openai-chatgpt/import-pi", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ authorization: pasteToken }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        setPasteToken("");
+        stopOwnedProxy();
+        setStep("success");
+        onSuccessRef.current?.();
+        return;
+      }
+
       // Paste-token mode (Trae/Windsurf): token goes straight to /exchange
       if (authMode === "paste-token" && PASTE_TOKEN_PROVIDERS[provider]) {
         const token = pasteToken.trim();
@@ -762,6 +777,35 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   return (
     <Modal isOpen={isOpen} title={modalTitle} onClose={handleClose} size="lg">
       <div className="flex flex-col gap-4">
+        {provider === "openai-chatgpt" && step !== "success" && (
+          <>
+            <div className="flex gap-2">
+              <Button variant={authMode === "browser" ? "primary" : "secondary"} onClick={() => { setAuthMode("browser"); setError(null); setStep("waiting"); startOAuthFlow(); }} fullWidth>
+                Sign in with browser
+              </Button>
+              <Button variant={authMode === "pi-json" ? "primary" : "secondary"} onClick={() => { stopOwnedProxy(); setAuthData(null); setAuthMode("pi-json"); setError(null); setStep("input"); }} fullWidth>
+                Paste Pi JSON
+              </Button>
+            </div>
+            {authMode === "pi-json" && (
+              <div className="space-y-3">
+                <p className="text-sm text-text-muted">Paste the OpenAI OAuth entry from Pi or the full auth.json containing the openai entry. OpenAI Codex credentials are not compatible.</p>
+                <p className="text-sm text-amber-600 dark:text-amber-400">This imports secrets. Avoid using the same authorization in Pi and this router simultaneously: refreshing in either app can invalidate the refresh token stored in the other app.</p>
+                <textarea
+                  aria-label="Pi authorization JSON"
+                  value={pasteToken}
+                  onChange={(event) => setPasteToken(event.target.value)}
+                  placeholder={'{"openai":{"type":"oauth","access":"...","refresh":"...","expires":0,"clientId":"...","scopes":["chatgpt.tokens.use.direct"]}}'}
+                  rows={8}
+                  spellCheck={false}
+                  autoComplete="off"
+                  className="w-full rounded-lg border border-border bg-bg p-3 font-mono text-xs"
+                />
+                <Button onClick={handleManualSubmit} fullWidth disabled={!pasteToken.trim()}>Import Pi authorization</Button>
+              </div>
+            )}
+          </>
+        )}
         {/* Proxy OAuth (trae/windsurf/zed): browser flow; paste-token only when configured */}
         {PROXY_OAUTH_PROVIDERS.has(provider) && (step === "waiting" || step === "input" || step === "error") && (
           <>
@@ -849,7 +893,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         )}
 
         {/* Waiting + Manual Input combined (non-device-code, non-proxy) */}
-        {(step === "waiting" || step === "input") && !isDeviceCode && !PROXY_OAUTH_PROVIDERS.has(provider) && (
+        {(step === "waiting" || step === "input") && !isDeviceCode && !PROXY_OAUTH_PROVIDERS.has(provider) && authMode !== "pi-json" && (
           <>
             {/* Option A: open the authorization page manually */}
             <Button

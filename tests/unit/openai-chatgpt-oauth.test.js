@@ -15,6 +15,7 @@ describe("Pi OpenAI ChatGPT direct OAuth", () => {
     const second = new URL(provider.buildAuthUrl(provider.config, CHATGPT_REDIRECT_URI, "other", "challenge"));
     expect(first.origin + first.pathname).toBe("https://auth.openai.com/api/accounts/authorize");
     expect(first.searchParams.get("client_id")).toBe("dynamic_agent_client");
+    expect(first.searchParams.get("agent_name_hint")).toBe("Pi");
     expect(first.searchParams.get("resource")).toBe("https://api.openai.com/v1");
     expect(first.searchParams.get("scope")).toContain("chatgpt.tokens.use.direct");
     expect(first.searchParams.get("ext_agent_host_id")).toMatch(/^urn:uuid:[a-f0-9-]{36}$/);

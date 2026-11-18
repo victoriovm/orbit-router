@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { parsePiChatGPTAuthorization } from "@/lib/oauth/piChatGPTImport";
 import { registerChatGPTSession, startChatGPTProxy, stopChatGPTProxy, getChatGPTSessionStatus, completeChatGPTSession } from "@/lib/oauth/openaiChatGPTSession";
 import { CHATGPT_REDIRECT_URI } from "open-sse/shared/openaiChatGPTAuth.js";
 import { NextResponse } from "next/server";
@@ -344,6 +345,22 @@ export async function POST(request, { params }) {
     }
 
     if (provider === "openai-chatgpt") {
+      if (action === "import-pi") {
+        let credentials;
+        try {
+          credentials = parsePiChatGPTAuthorization(body.authorization);
+        } catch (error) {
+          return NextResponse.json({ error: error.message }, { status: 400 });
+        }
+        try {
+          const connection = await createProviderConnection({
+            provider, authType: "oauth", name: credentials.providerSpecificData.oauthClientId, ...credentials, testStatus: "unknown",
+          });
+          return NextResponse.json({ success: true, connection: { id: connection.id, provider: connection.provider } });
+        } catch {
+          return NextResponse.json({ error: "Could not save Pi authorization" }, { status: 500 });
+        }
+      }
       if (action !== "exchange") return NextResponse.json({ error: "Unsupported ChatGPT OAuth action" }, { status: 400 });
       try {
         const callback = new URL(body.callbackUrl);

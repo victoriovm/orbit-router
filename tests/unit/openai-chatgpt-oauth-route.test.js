@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ generate: vi.fn(), register: vi.fn(), complete: vi.fn(), create: vi.fn() }));
 vi.mock("@/lib/oauth/providers", () => ({ generateAuthData: mocks.generate, getProvider: vi.fn(), exchangeTokens: vi.fn(), requestDeviceCode: vi.fn(), pollForToken: vi.fn() }));
 vi.mock("@/lib/oauth/openaiChatGPTSession", () => ({ registerChatGPTSession: mocks.register, completeChatGPTSession: mocks.complete, getChatGPTSessionStatus: vi.fn(), startChatGPTProxy: vi.fn(), stopChatGPTProxy: vi.fn() }));
@@ -9,6 +9,22 @@ const { GET, POST } = await import("../../src/app/api/oauth/[provider]/[action]/
 const params = (action) => ({ params: Promise.resolve({ provider: "openai-chatgpt", action }) });
 
 describe("ChatGPT OAuth route safety", () => {
+  beforeEach(() => vi.clearAllMocks());
+  it("imports Pi JSON without returning secrets or exchanging refresh tokens", async () => {
+    const credential = { type: "oauth", access: "secret-access", refresh: "secret-refresh", clientId: "issued", expires: 1800000000000, scopes: ["chatgpt.tokens.use.direct"] };
+    mocks.create.mockResolvedValue({ id: "imported", provider: "openai-chatgpt" });
+    const response = await POST(new Request("http://localhost/api/oauth/openai-chatgpt/import-pi", { method: "POST", body: JSON.stringify({ authorization: JSON.stringify({ openai: credential }) }) }), params("import-pi"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true, connection: { id: "imported", provider: "openai-chatgpt" } });
+    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ authType: "oauth", name: "issued", accessToken: "secret-access", refreshToken: "secret-refresh", providerSpecificData: expect.objectContaining({ oauthClientId: "issued" }) }));
+    expect(mocks.complete).not.toHaveBeenCalled();
+  });
+  it("rejects malformed Pi JSON without persisting it", async () => {
+    const response = await POST(new Request("http://localhost/api/oauth/openai-chatgpt/import-pi", { method: "POST", body: JSON.stringify({ authorization: "not-json-secret" }) }), params("import-pi"));
+    expect(response.status).toBe(400);
+    expect(await response.text()).not.toContain("not-json-secret");
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
   it("registers server-held state and forces the exact loopback redirect", async () => {
     const auth = { state: "state", codeVerifier: "server-secret", redirectUri: "http://127.0.0.1:1455/auth/callback" };
     mocks.generate.mockResolvedValue(auth);
