@@ -156,6 +156,7 @@ import p153 from "./runcrate.js";
 import p154 from "./nace.js";
 import p155 from "./sensenova-intl.js";
 import p156 from "./synthetic.js";
+import p157 from "./openai-chatgpt.js";
 export default [
   p0,
   p1,
@@ -312,4 +313,5 @@ export default [
   p154,
   p155,
   p156,
+  p157,
 ];

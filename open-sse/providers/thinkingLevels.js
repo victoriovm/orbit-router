@@ -112,8 +112,8 @@ export function getThinkingLevels(provider, model) {
   const caps = getCapabilitiesForModel(provider, model);
   if (!caps.reasoning) return null;
   const baseId = String(model || "").replace(/\([^()]+\)\s*$/, "");
-  const modelLevels = provider === "codex"
-    ? getProviderModels("cx").find((entry) => entry.id === baseId)?.thinkingLevels
+  const modelLevels = provider === "codex" || provider === "openai-chatgpt"
+    ? getProviderModels(provider === "codex" ? "cx" : "chatgpt").find((entry) => entry.id === baseId)?.thinkingLevels
     : null;
   const hit = PATTERN_THINKING.find((entry) =>
     (!entry.provider || entry.provider === provider) && matchPattern(entry.pattern, model)

@@ -319,6 +319,9 @@ const PROVIDER_MODELS_CONFIG = {
     }
   },
   openai: createOpenAIModelsConfig("https://api.openai.com/v1/models"),
+  "openai-chatgpt": {
+    customResolver: async () => ({ models: getStaticProviderModels("openai-chatgpt") }),
+  },
   openrouter: createOpenAIModelsConfig("https://openrouter.ai/api/v1/models"),
   nous: {
     ...createOpenAIModelsConfig(NOUS_MODELS_URL),

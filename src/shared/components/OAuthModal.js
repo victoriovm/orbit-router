@@ -82,9 +82,12 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   // Define all useCallback hooks BEFORE the useEffects that reference them
 
   // Exchange tokens
-  const exchangeTokens = useCallback(async (code, state) => {
+  const exchangeTokens = useCallback(async (code, state, callbackUrl = null, clientId = null) => {
     if (!authData) return;
     try {
+      if (provider === "openai-chatgpt" && (!state || state !== authData.state || !clientId || !callbackUrl)) {
+        throw new Error("Paste the full callback URL for this login, including state and client_id");
+      }
       const res = await fetch(`/api/oauth/${provider}/exchange`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -96,7 +99,8 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
           // Zed: thread the login attempt's system_id so the stored
           // connection keeps the id sent to zed.dev (see register-session).
           ...(authData.systemId ? { systemId: authData.systemId } : {}),
-          ...(oauthMeta ? { meta: oauthMeta } : {}),
+          ...(oauthMeta || clientId ? { meta: { ...oauthMeta, ...(clientId ? { oauthClientId: clientId } : {}) } } : {}),
+          ...(callbackUrl ? { callbackUrl } : {}),
         }),
       });
 
@@ -200,7 +204,8 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     const flow = flowRef.current;
     if (flow.proxyStarted && !flow.stopSent && flow.proxyProvider) {
       flow.stopSent = true;
-      fetch(`/api/oauth/${flow.proxyProvider}/stop-proxy`).catch(() => {});
+      const query = flow.state ? `?state=${encodeURIComponent(flow.state)}` : "";
+      fetch(`/api/oauth/${flow.proxyProvider}/stop-proxy${query}`).catch(() => {});
     }
   }, []);
 
@@ -357,7 +362,9 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       // Authorization code flow - build redirect URI (some providers require fixed ports)
       const appPort = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
       let redirectUri;
-      if (provider === "codex") {
+      if (provider === "openai-chatgpt") {
+        redirectUri = "http://127.0.0.1:1455/auth/callback";
+      } else if (provider === "codex") {
         redirectUri = "http://localhost:1455/auth/callback";
       } else if (provider === "xai") {
         redirectUri = "http://127.0.0.1:56121/callback";
@@ -378,9 +385,9 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       // Codex: start proxy with server-side session (auto-exchange) + fallback to channels
       let codexProxyActive = false;
       let codexServerSide = false;
-      if (provider === "codex") {
+      if (provider === "codex" || provider === "openai-chatgpt") {
         try {
-          const proxyUrl = new URL(`/api/oauth/codex/start-proxy`, window.location.origin);
+          const proxyUrl = new URL(`/api/oauth/${provider}/start-proxy`, window.location.origin);
           proxyUrl.searchParams.set("app_port", appPort);
           proxyUrl.searchParams.set("state", data.state);
           proxyUrl.searchParams.set("code_verifier", data.codeVerifier);
@@ -421,9 +428,10 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 
       // Take ownership of server-side proxies so close stops them exactly once
       // (replaces the per-provider stop branches; same behavior, one ledger).
-      if ((provider === "codex" && codexProxyActive) || (provider === "xai" && xaiProxyActive)) {
+      if (((provider === "codex" || provider === "openai-chatgpt") && codexProxyActive) || (provider === "xai" && xaiProxyActive)) {
         flowRef.current.proxyStarted = true;
         flowRef.current.proxyProvider = provider;
+        flowRef.current.state = data.state;
         flowRef.current.stopSent = false;
       }
 
@@ -438,13 +446,13 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         throw new Error("No authorization URL returned from OAuth provider");
       }
 
-      if (provider === "codex" && codexProxyActive) {
+      if ((provider === "codex" || provider === "openai-chatgpt") && codexProxyActive) {
         // Proxy active: callback is handled server-side (auto-exchange) or via
         // channels (fallback). The user opens the authorize URL from the card.
         setStep("waiting");
       } else if (provider === "xai" && xaiProxyActive) {
         setStep("waiting");
-      } else if (!isLocalhost || provider === "codex" || provider === "xai") {
+      } else if (!isLocalhost || provider === "codex" || provider === "openai-chatgpt" || provider === "xai") {
         // Non-localhost or proxy failed: manual input mode
         setStep("input");
       } else {
@@ -509,7 +517,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   // poll status until the proxy auto-exchanges and saves the connection.
   useEffect(() => {
     const pollProvider = authData?.codexServerSide
-      ? "codex"
+      ? provider
       : authData?.xaiServerSide
         ? "xai"
         : authData?.proxyProvider
@@ -554,7 +562,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     };
     setTimeout(tick, POLL_INTERVAL_MS);
     return () => { cancelled = true; };
-  }, [authData]);
+  }, [authData, provider]);
 
   // Listen for OAuth callback via multiple methods
   useEffect(() => {
@@ -566,6 +574,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       if (callbackProcessedRef.current) return; // Already processed
 
       const { code, token, state, error: callbackError, errorDescription } = data;
+      if (provider === "openai-chatgpt" && state !== authData.state) return;
 
       if (callbackError) {
         callbackProcessedRef.current = true;
@@ -576,7 +585,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 
       if (token || code) {
         callbackProcessedRef.current = true;
-        await exchangeTokens(token || code, state);
+        await exchangeTokens(token || code, state, data.callbackUrl, data.clientId);
       }
     };
 
@@ -635,7 +644,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       window.removeEventListener("storage", handleStorage);
       if (channel) channel.close();
     };
-  }, [authData, exchangeTokens]);
+  }, [authData, exchangeTokens, provider]);
 
   // Handle manual URL input
   const handleManualSubmit = async () => {
@@ -683,7 +692,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       }
 
       // Detect raw JWT access token (starts with eyJ) — skip URL parsing
-      if (input.startsWith("eyJ") && input.includes(".")) {
+      if (provider !== "openai-chatgpt" && input.startsWith("eyJ") && input.includes(".")) {
         await exchangeTokens(input, null);
         return;
       }
@@ -699,6 +708,12 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       }
 
       const url = new URL(input);
+      if (provider === "openai-chatgpt") {
+        const expected = new URL(authData.redirectUri);
+        if (url.origin !== expected.origin || url.pathname !== expected.pathname) {
+          throw new Error(`The callback URL must start with ${authData.redirectUri}`);
+        }
+      }
       const code = url.searchParams.get("code");
       const token = url.searchParams.get("token");
       const state = url.searchParams.get("state");
@@ -718,7 +733,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         );
       }
 
-      await exchangeTokens(token || code, state);
+      await exchangeTokens(token || code, state, provider === "openai-chatgpt" ? url.toString() : null, url.searchParams.get("client_id"));
     } catch (err) {
       setError(err.message);
       setStep("error");

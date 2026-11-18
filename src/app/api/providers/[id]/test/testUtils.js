@@ -35,6 +35,16 @@ import { hasWebIdentityProbe, fetchWebIdentity } from "open-sse/services/webIden
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
   claude: { checkExpiry: true, refreshable: true },
+  "openai-chatgpt": {
+    url: "https://api.openai.com/v1/responses",
+    method: "POST",
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    extraHeaders: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "__auth_probe__", input: [], stream: true, store: false }),
+    acceptStatuses: [400],
+    refreshable: true,
+  },
   codex: {
     url: "https://chatgpt.com/backend-api/codex/responses",
     method: "POST",
@@ -286,7 +296,7 @@ async function refreshOAuthToken(connection) {
       return { accessToken: data.access_token, expiresIn: data.expires_in, refreshToken: data.refresh_token || refreshToken };
     }
 
-    if (provider === "codex" || provider === "grok-cli" || provider === "xai" || provider === "nous") {
+    if (provider === "codex" || provider === "openai-chatgpt" || provider === "grok-cli" || provider === "xai" || provider === "nous") {
       return await refreshProviderCredentials(provider, connection, console);
     }
 

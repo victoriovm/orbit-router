@@ -1,4 +1,6 @@
 import crypto from "crypto";
+import { registerChatGPTSession, startChatGPTProxy, stopChatGPTProxy, getChatGPTSessionStatus, completeChatGPTSession } from "@/lib/oauth/openaiChatGPTSession";
+import { CHATGPT_REDIRECT_URI } from "open-sse/shared/openaiChatGPTAuth.js";
 import { NextResponse } from "next/server";
 import {
   getProvider,
@@ -96,6 +98,23 @@ export async function GET(request, { params }) {
   try {
     const { provider, action } = await params;
     const { searchParams } = new URL(request.url);
+
+    if (provider === "openai-chatgpt") {
+      if (action === "authorize") {
+        const authData = await generateAuthData(provider, CHATGPT_REDIRECT_URI);
+        registerChatGPTSession(authData);
+        return NextResponse.json(authData);
+      }
+      const state = searchParams.get("state");
+      if (action === "start-proxy") return NextResponse.json(await startChatGPTProxy(state));
+      if (action === "poll-status") return NextResponse.json(getChatGPTSessionStatus(state));
+      if (action === "stop-proxy") {
+        getChatGPTSessionStatus(state);
+        stopChatGPTProxy(state);
+        return NextResponse.json({ success: true });
+      }
+      return NextResponse.json({ error: "Unsupported ChatGPT OAuth action" }, { status: 400 });
+    }
 
     if (action === "authorize") {
       // Xiaomi Desktop: custom ECDH flow — generate keypair, start proxy, return authorize URL
@@ -322,6 +341,17 @@ export async function POST(request, { params }) {
       body = await request.json();
     } catch {
       return NextResponse.json({ error: "Invalid or empty request body" }, { status: 400 });
+    }
+
+    if (provider === "openai-chatgpt") {
+      if (action !== "exchange") return NextResponse.json({ error: "Unsupported ChatGPT OAuth action" }, { status: 400 });
+      try {
+        const callback = new URL(body.callbackUrl);
+        if (!body.state || callback.searchParams.get("state") !== body.state) throw new Error("OAuth state mismatch");
+        return NextResponse.json(await completeChatGPTSession(callback.toString()));
+      } catch (error) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
+      }
     }
 
     if (action === "lease-connect") {
