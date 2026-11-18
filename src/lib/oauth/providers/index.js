@@ -6,7 +6,6 @@ import { extractCodexAccountInfo, fetchKiroProfileArn } from "../providerHelpers
 
 import claude from "./claude.js";
 import codex from "./codex.js";
-import openaiChatGPT from "./openai-chatgpt.js";
 import xai from "./xai.js";
 import grokCli from "./grok-cli.js";
 import muse from "./muse.js";
@@ -38,7 +37,6 @@ import nous from "./nous.js";
 const PROVIDERS = {
   claude,
   codex,
-  "openai-chatgpt": openaiChatGPT,
   xai,
   "grok-cli": grokCli,
   muse,

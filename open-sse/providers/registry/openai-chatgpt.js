@@ -54,13 +54,8 @@ export default {
   ],
   oauth: {
     clientId: "dynamic_agent_client",
-    authorizeUrl: "https://auth.openai.com/api/accounts/authorize",
     tokenUrl: "https://auth.openai.com/api/accounts/oauth/token",
     resource: "https://api.openai.com/v1",
-    scope: "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct",
-    codeChallengeMethod: "S256",
-    fixedPort: 1455,
-    callbackPath: "/auth/callback",
     refreshLeadMs: 180000,
   },
 };

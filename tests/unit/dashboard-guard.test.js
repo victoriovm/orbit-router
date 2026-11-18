@@ -63,6 +63,16 @@ describe("dashboard guard public LLM API access", () => {
     mocks.verifyDashboardAuthToken.mockResolvedValue(false);
   });
 
+  it.each(["pi-update", "pi-status", "pi-login", "pi-poll", "pi-complete", "pi-cancel"])("restricts Pi %s operations to the local authenticated dashboard", async (action) => {
+    const path = `/api/oauth/openai-chatgpt/${action}`;
+    mocks.getSettings.mockResolvedValue({ requireLogin: false });
+    expect((await proxy(request(path, { host: "router.example.com" }))).status).toBe(403);
+    expect(await proxy(localRequest(path, { host: "localhost:20127" }))).toBe(mocks.nextResponse);
+    mocks.getSettings.mockResolvedValue({ requireLogin: true });
+    expect((await proxy(localRequest(path, { host: "localhost:20127" }))).status).toBe(403);
+    expect(await proxy(request(path, { "x-9r-cli-token": "cli-token" }))).toBe(mocks.nextResponse);
+  });
+
   it("allows loopback public LLM API without API key", async () => {
     const response = await proxy(localRequest("/v1/chat/completions", { host: "localhost:20128" }));
 

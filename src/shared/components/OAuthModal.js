@@ -82,12 +82,9 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   // Define all useCallback hooks BEFORE the useEffects that reference them
 
   // Exchange tokens
-  const exchangeTokens = useCallback(async (code, state, callbackUrl = null, clientId = null) => {
+  const exchangeTokens = useCallback(async (code, state) => {
     if (!authData) return;
     try {
-      if (provider === "openai-chatgpt" && (!state || state !== authData.state || !clientId || !callbackUrl)) {
-        throw new Error("Paste the full callback URL for this login, including state and client_id");
-      }
       const res = await fetch(`/api/oauth/${provider}/exchange`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -99,8 +96,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
           // Zed: thread the login attempt's system_id so the stored
           // connection keeps the id sent to zed.dev (see register-session).
           ...(authData.systemId ? { systemId: authData.systemId } : {}),
-          ...(oauthMeta || clientId ? { meta: { ...oauthMeta, ...(clientId ? { oauthClientId: clientId } : {}) } } : {}),
-          ...(callbackUrl ? { callbackUrl } : {}),
+          ...(oauthMeta ? { meta: oauthMeta } : {}),
         }),
       });
 
@@ -362,9 +358,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       // Authorization code flow - build redirect URI (some providers require fixed ports)
       const appPort = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
       let redirectUri;
-      if (provider === "openai-chatgpt") {
-        redirectUri = "http://127.0.0.1:1455/auth/callback";
-      } else if (provider === "codex") {
+      if (provider === "codex") {
         redirectUri = "http://localhost:1455/auth/callback";
       } else if (provider === "xai") {
         redirectUri = "http://127.0.0.1:56121/callback";
@@ -385,7 +379,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       // Codex: start proxy with server-side session (auto-exchange) + fallback to channels
       let codexProxyActive = false;
       let codexServerSide = false;
-      if (provider === "codex" || provider === "openai-chatgpt") {
+      if (provider === "codex") {
         try {
           const proxyUrl = new URL(`/api/oauth/${provider}/start-proxy`, window.location.origin);
           proxyUrl.searchParams.set("app_port", appPort);
@@ -428,7 +422,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 
       // Take ownership of server-side proxies so close stops them exactly once
       // (replaces the per-provider stop branches; same behavior, one ledger).
-      if (((provider === "codex" || provider === "openai-chatgpt") && codexProxyActive) || (provider === "xai" && xaiProxyActive)) {
+      if (((provider === "codex") && codexProxyActive) || (provider === "xai" && xaiProxyActive)) {
         flowRef.current.proxyStarted = true;
         flowRef.current.proxyProvider = provider;
         flowRef.current.state = data.state;
@@ -446,13 +440,13 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         throw new Error("No authorization URL returned from OAuth provider");
       }
 
-      if ((provider === "codex" || provider === "openai-chatgpt") && codexProxyActive) {
+      if ((provider === "codex") && codexProxyActive) {
         // Proxy active: callback is handled server-side (auto-exchange) or via
         // channels (fallback). The user opens the authorize URL from the card.
         setStep("waiting");
       } else if (provider === "xai" && xaiProxyActive) {
         setStep("waiting");
-      } else if (!isLocalhost || provider === "codex" || provider === "openai-chatgpt" || provider === "xai") {
+      } else if (!isLocalhost || provider === "codex" || provider === "xai") {
         // Non-localhost or proxy failed: manual input mode
         setStep("input");
       } else {
@@ -574,7 +568,6 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       if (callbackProcessedRef.current) return; // Already processed
 
       const { code, token, state, error: callbackError, errorDescription } = data;
-      if (provider === "openai-chatgpt" && state !== authData.state) return;
 
       if (callbackError) {
         callbackProcessedRef.current = true;
@@ -585,7 +578,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 
       if (token || code) {
         callbackProcessedRef.current = true;
-        await exchangeTokens(token || code, state, data.callbackUrl, data.clientId);
+        await exchangeTokens(token || code, state);
       }
     };
 
@@ -651,21 +644,6 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     try {
       setError(null);
 
-      if (provider === "openai-chatgpt" && authMode === "pi-json") {
-        const res = await fetch("/api/oauth/openai-chatgpt/import-pi", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ authorization: pasteToken }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
-        setPasteToken("");
-        stopOwnedProxy();
-        setStep("success");
-        onSuccessRef.current?.();
-        return;
-      }
-
       // Paste-token mode (Trae/Windsurf): token goes straight to /exchange
       if (authMode === "paste-token" && PASTE_TOKEN_PROVIDERS[provider]) {
         const token = pasteToken.trim();
@@ -707,7 +685,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       }
 
       // Detect raw JWT access token (starts with eyJ) — skip URL parsing
-      if (provider !== "openai-chatgpt" && input.startsWith("eyJ") && input.includes(".")) {
+      if (input.startsWith("eyJ") && input.includes(".")) {
         await exchangeTokens(input, null);
         return;
       }
@@ -723,12 +701,6 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       }
 
       const url = new URL(input);
-      if (provider === "openai-chatgpt") {
-        const expected = new URL(authData.redirectUri);
-        if (url.origin !== expected.origin || url.pathname !== expected.pathname) {
-          throw new Error(`The callback URL must start with ${authData.redirectUri}`);
-        }
-      }
       const code = url.searchParams.get("code");
       const token = url.searchParams.get("token");
       const state = url.searchParams.get("state");
@@ -748,7 +720,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         );
       }
 
-      await exchangeTokens(token || code, state, provider === "openai-chatgpt" ? url.toString() : null, url.searchParams.get("client_id"));
+      await exchangeTokens(token || code, state);
     } catch (err) {
       setError(err.message);
       setStep("error");
@@ -777,35 +749,6 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   return (
     <Modal isOpen={isOpen} title={modalTitle} onClose={handleClose} size="lg">
       <div className="flex flex-col gap-4">
-        {provider === "openai-chatgpt" && step !== "success" && (
-          <>
-            <div className="flex gap-2">
-              <Button variant={authMode === "browser" ? "primary" : "secondary"} onClick={() => { setAuthMode("browser"); setError(null); setStep("waiting"); startOAuthFlow(); }} fullWidth>
-                Sign in with browser
-              </Button>
-              <Button variant={authMode === "pi-json" ? "primary" : "secondary"} onClick={() => { stopOwnedProxy(); setAuthData(null); setAuthMode("pi-json"); setError(null); setStep("input"); }} fullWidth>
-                Paste Pi JSON
-              </Button>
-            </div>
-            {authMode === "pi-json" && (
-              <div className="space-y-3">
-                <p className="text-sm text-text-muted">Paste the OpenAI OAuth entry from Pi or the full auth.json containing the openai entry. OpenAI Codex credentials are not compatible.</p>
-                <p className="text-sm text-amber-600 dark:text-amber-400">This imports secrets. Avoid using the same authorization in Pi and this router simultaneously: refreshing in either app can invalidate the refresh token stored in the other app.</p>
-                <textarea
-                  aria-label="Pi authorization JSON"
-                  value={pasteToken}
-                  onChange={(event) => setPasteToken(event.target.value)}
-                  placeholder={'{"openai":{"type":"oauth","access":"...","refresh":"...","expires":0,"clientId":"...","scopes":["chatgpt.tokens.use.direct"]}}'}
-                  rows={8}
-                  spellCheck={false}
-                  autoComplete="off"
-                  className="w-full rounded-lg border border-border bg-bg p-3 font-mono text-xs"
-                />
-                <Button onClick={handleManualSubmit} fullWidth disabled={!pasteToken.trim()}>Import Pi authorization</Button>
-              </div>
-            )}
-          </>
-        )}
         {/* Proxy OAuth (trae/windsurf/zed): browser flow; paste-token only when configured */}
         {PROXY_OAUTH_PROVIDERS.has(provider) && (step === "waiting" || step === "input" || step === "error") && (
           <>

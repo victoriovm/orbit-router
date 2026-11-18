@@ -23,6 +23,8 @@ import AddApiKeyModal from "./AddApiKeyModal";
 import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
 import AddCustomModelModal from "./AddCustomModelModal";
 import BulkImportCodexModal from "./BulkImportCodexModal";
+import PiAuthModal from "./PiAuthModal";
+import PiUpdateButton from "./PiUpdateButton";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
 import CustomConfigCard from "./CustomConfigCard";
 import AutoPingScheduleModal from "./AutoPingScheduleModal";
@@ -1680,6 +1682,7 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
                         {translate("Bulk Add")}
                       </Button>
                     )}
+                    {providerId === "openai-chatgpt" && <PiUpdateButton />}
                     <Button
                       size="sm"
                       icon="add"
@@ -1767,6 +1770,7 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
                       {translate("Bulk Add")}
                     </Button>
                   )}
+                  {providerId === "openai-chatgpt" && <PiUpdateButton />}
                   {hasDualAuthModes ? (
                     <>
                       <Button
@@ -1887,7 +1891,13 @@ const [discoveringModels, setDiscoveringModels] = useState(false);
       {bulkActionModal}
 
       {/* Modals */}
-      {providerId === "kiro" ? (
+      {providerId === "openai-chatgpt" ? (
+        <PiAuthModal
+          isOpen={showOAuthModal}
+          onSuccess={handleOAuthSuccess}
+          onClose={() => setShowOAuthModal(false)}
+        />
+      ) : providerId === "kiro" ? (
         <KiroOAuthWrapper
           isOpen={showOAuthModal}
           providerInfo={providerInfo}

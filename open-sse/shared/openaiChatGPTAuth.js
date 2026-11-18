@@ -2,10 +2,9 @@ import { PROVIDER_OAUTH } from "../config/providers.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 
 export const CHATGPT_CONFIG = PROVIDER_OAUTH["openai-chatgpt"];
-export const CHATGPT_REDIRECT_URI = "http://127.0.0.1:1455/auth/callback";
 const DIRECT_SCOPE = "chatgpt.tokens.use.direct";
 
-export async function requestChatGPTToken(params, clientId, initial = false) {
+export async function requestChatGPTToken(params, clientId) {
   if (typeof clientId !== "string" || !clientId.trim() || clientId === CHATGPT_CONFIG.clientId) {
     throw new Error("Missing issued OpenAI client ID; reconnect ChatGPT");
   }
@@ -17,7 +16,7 @@ export async function requestChatGPTToken(params, clientId, initial = false) {
   });
   if (!response.ok) throw new Error(`OpenAI token request failed (${response.status}); reconnect ChatGPT`);
   const token = await response.json();
-  for (const field of ["access_token", "refresh_token", "scope", ...(initial ? ["id_token"] : [])]) {
+  for (const field of ["access_token", "refresh_token", "scope"]) {
     if (typeof token?.[field] !== "string" || !token[field].trim()) throw new Error(`Invalid OpenAI token response: ${field}`);
   }
   if (!Number.isFinite(token.expires_in) || token.expires_in <= 0) throw new Error("Invalid OpenAI token expiration");

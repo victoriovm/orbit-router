@@ -24,8 +24,6 @@ function CallbackContent() {
       error,
       errorDescription,
       fullUrl: window.location.href,
-      callbackUrl: window.location.href,
-      clientId: searchParams.get("client_id"),
     };
 
     let relayed = false;

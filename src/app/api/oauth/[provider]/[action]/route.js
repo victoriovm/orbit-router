@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { parsePiChatGPTAuthorization } from "@/lib/oauth/piChatGPTImport";
-import { registerChatGPTSession, startChatGPTProxy, stopChatGPTProxy, getChatGPTSessionStatus, completeChatGPTSession } from "@/lib/oauth/openaiChatGPTSession";
-import { CHATGPT_REDIRECT_URI } from "open-sse/shared/openaiChatGPTAuth.js";
+import { getPiStatus, updatePi } from "@/lib/oauth/piRuntime";
+import { createPiSessionManager } from "@/lib/oauth/piSession";
 import { NextResponse } from "next/server";
 import {
   getProvider,
@@ -48,6 +48,8 @@ import {
 } from "@/lib/oauth/utils/server";
 import { detectIdeInstalled } from "@/lib/oauth/utils/ideDetect";
 import { ZED_HOSTED_CONFIG } from "@/lib/oauth/constants/oauth";
+
+const piSessions = globalThis.__orbitPiSessions ||= createPiSessionManager({ saveConnection: createProviderConnection });
 
 async function completeXaiManualCode(code, state) {
   const session = state ? getXaiSessionStatus(state) : null;
@@ -101,18 +103,10 @@ export async function GET(request, { params }) {
     const { searchParams } = new URL(request.url);
 
     if (provider === "openai-chatgpt") {
-      if (action === "authorize") {
-        const authData = await generateAuthData(provider, CHATGPT_REDIRECT_URI);
-        registerChatGPTSession(authData);
-        return NextResponse.json(authData);
-      }
-      const state = searchParams.get("state");
-      if (action === "start-proxy") return NextResponse.json(await startChatGPTProxy(state));
-      if (action === "poll-status") return NextResponse.json(getChatGPTSessionStatus(state));
-      if (action === "stop-proxy") {
-        getChatGPTSessionStatus(state);
-        stopChatGPTProxy(state);
-        return NextResponse.json({ success: true });
+      if (action === "pi-status") return NextResponse.json(await getPiStatus());
+      if (action === "pi-poll") {
+        try { return NextResponse.json(piSessions.poll(searchParams.get("session_id"))); }
+        catch (error) { return NextResponse.json({ status: "error", error: error.message }, { status: 404 }); }
       }
       return NextResponse.json({ error: "Unsupported ChatGPT OAuth action" }, { status: 400 });
     }
@@ -339,7 +333,7 @@ export async function POST(request, { params }) {
     const { provider, action } = await params;
     let body;
     try {
-      body = await request.json();
+      body = provider === "openai-chatgpt" && ["pi-login", "pi-update"].includes(action) ? {} : await request.json();
     } catch {
       return NextResponse.json({ error: "Invalid or empty request body" }, { status: 400 });
     }
@@ -348,7 +342,7 @@ export async function POST(request, { params }) {
       if (action === "import-pi") {
         let credentials;
         try {
-          credentials = parsePiChatGPTAuthorization(body.authorization);
+          credentials = parsePiChatGPTAuthorization(body?.authorization);
         } catch (error) {
           return NextResponse.json({ error: error.message }, { status: 400 });
         }
@@ -361,11 +355,20 @@ export async function POST(request, { params }) {
           return NextResponse.json({ error: "Could not save Pi authorization" }, { status: 500 });
         }
       }
-      if (action !== "exchange") return NextResponse.json({ error: "Unsupported ChatGPT OAuth action" }, { status: 400 });
       try {
-        const callback = new URL(body.callbackUrl);
-        if (!body.state || callback.searchParams.get("state") !== body.state) throw new Error("OAuth state mismatch");
-        return NextResponse.json(await completeChatGPTSession(callback.toString()));
+        if (action === "pi-update") {
+          if (piSessions.isActive()) return NextResponse.json({ error: "Finish or cancel the Pi login before updating" }, { status: 409 });
+          return NextResponse.json(await updatePi());
+        }
+        if (action === "pi-login") {
+          const status = await getPiStatus();
+          if (status.updating) return NextResponse.json({ error: "Pi update is in progress" }, { status: 409 });
+          if (!status.installed) return NextResponse.json({ error: "Pi is not installed; update Pi first" }, { status: 409 });
+          return NextResponse.json(piSessions.start());
+        }
+        if (action === "pi-complete") return NextResponse.json(piSessions.complete(body.sessionId, body.callbackUrl));
+        if (action === "pi-cancel") return NextResponse.json(await piSessions.cancel(body.sessionId));
+        return NextResponse.json({ error: "Unsupported ChatGPT OAuth action" }, { status: 400 });
       } catch (error) {
         return NextResponse.json({ error: error.message }, { status: 400 });
       }
