@@ -63,13 +63,16 @@ describe("dashboard guard public LLM API access", () => {
     mocks.verifyDashboardAuthToken.mockResolvedValue(false);
   });
 
-  it.each(["pi-update", "pi-status", "pi-login", "pi-poll", "pi-complete", "pi-cancel"])("restricts Pi %s operations to the local authenticated dashboard", async (action) => {
+  it.each(["pi-update", "pi-status", "pi-login", "pi-poll", "pi-complete", "pi-cancel"])("allows remote Pi %s operations under normal dashboard authentication", async (action) => {
     const path = `/api/oauth/openai-chatgpt/${action}`;
+    const remote = () => request(path, { host: "router.example.com", origin: "https://router.example.com", "x-9r-via-proxy": "1" });
+    expect((await proxy(remote())).status).toBe(401);
+    mocks.verifyDashboardAuthToken.mockResolvedValue(true);
+    expect(await proxy(remote())).toBe(mocks.nextResponse);
+    mocks.verifyDashboardAuthToken.mockResolvedValue(false);
     mocks.getSettings.mockResolvedValue({ requireLogin: false });
-    expect((await proxy(request(path, { host: "router.example.com" }))).status).toBe(403);
-    expect(await proxy(localRequest(path, { host: "localhost:20127" }))).toBe(mocks.nextResponse);
+    expect(await proxy(remote())).toBe(mocks.nextResponse);
     mocks.getSettings.mockResolvedValue({ requireLogin: true });
-    expect((await proxy(localRequest(path, { host: "localhost:20127" }))).status).toBe(403);
     expect(await proxy(request(path, { "x-9r-cli-token": "cli-token" }))).toBe(mocks.nextResponse);
   });
 
