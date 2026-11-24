@@ -39,7 +39,7 @@ const ONE_BY_ONE_DELAY_MS = 1000;
 // public; the others resolve with the connection's credentials. The registry list for
 // these is only an offline fallback: the dashboard renders the live catalog when one
 // resolves, and falls back to the static rows otherwise.
-const LIVE_CATALOG_PROVIDER_IDS = ["cursor", "cline", "clinepass", "zed", "claude", "commandcode"];
+const LIVE_CATALOG_PROVIDER_IDS = ["cursor", "cline", "clinepass", "zed", "claude", "commandcode", "antigravity"];
 
 const MCODE_LEASE_PROVIDERS = new Set(["minimax-code", "minimax-code-global"]);
 
